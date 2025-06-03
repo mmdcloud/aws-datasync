@@ -119,6 +119,12 @@ resource "aws_datasync_location_efs" "efs_location" {
   }
 }
 
+# Add this resource for CloudWatch Log Group
+resource "aws_cloudwatch_log_group" "datasync_logs" {
+  name              = "/aws/datasync/s3-to-efs-sync"
+  retention_in_days = 7
+}
+
 # Create DataSync task
 resource "aws_datasync_task" "s3_to_efs" {
   name                     = "s3-to-efs-sync"
@@ -135,8 +141,10 @@ resource "aws_datasync_task" "s3_to_efs" {
     atime                  = "BEST_EFFORT"
     mtime                  = "PRESERVE"
     task_queueing          = "ENABLED"
-    # log_level              = "TRANSFER"
+    log_level              = "TRANSFER"
   }
+
+  cloudwatch_log_group_arn = aws_cloudwatch_log_group.datasync_logs.arn
 
   depends_on = [
     aws_datasync_location_s3.s3_location,
