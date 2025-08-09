@@ -1,9 +1,12 @@
 # Random suffix for bucket name
-resource "random_id" "bucket_suffix" {
+resource "random_id" "id" {
   byte_length = 4
 }
 
+# -----------------------------------------------------------------------------------------
 # VPC Configuration
+# -----------------------------------------------------------------------------------------
+
 module "vpc" {
   source                = "./modules/vpc/vpc"
   vpc_name              = "vpc"
@@ -14,14 +17,23 @@ module "vpc" {
 }
 
 # Security Group
-module "sg" {
-  source = "../../modules/vpc/security_groups"
+module "efs_sg" {
+  source = "./modules/vpc/security_groups"
   vpc_id = module.vpc.vpc_id
   name   = "efs-sg"
   ingress = [
     {
       from_port       = 2049
       to_port         = 2049
+      protocol        = "tcp"
+      self            = "false"
+      cidr_blocks     = ["0.0.0.0/0"]
+      security_groups = []
+      description     = "any"
+    },
+    {
+      from_port       = 22
+      to_port         = 22
       protocol        = "tcp"
       self            = "false"
       cidr_blocks     = ["0.0.0.0/0"]
@@ -40,94 +52,203 @@ module "sg" {
 }
 
 # Public Subnets
-module "subnets" {
-  source = "../../modules/vpc/subnets"
-  name   = "subnet_${random_id.bucket_suffix.hex}"
+module "public_subnets" {
+  source = "./modules/vpc/subnets"
+  name   = "public-subnet"
   subnets = [
     {
       subnet = "10.0.1.0/24"
       az     = "us-east-1a"
+    },
+    {
+      subnet = "10.0.2.0/24"
+      az     = "us-east-1b"
+    },
+    {
+      subnet = "10.0.3.0/24"
+      az     = "us-east-1c"
     }
   ]
   vpc_id                  = module.vpc.vpc_id
   map_public_ip_on_launch = true
 }
-# resource "aws_vpc" "example" {
-#   cidr_block = "10.0.0.0/16"
-# }
 
-# resource "aws_subnet" "example" {
-#   vpc_id     = aws_vpc.example.id
-#   cidr_block = "10.0.1.0/24"
-# }
-
-# resource "aws_security_group" "efs_sg" {
-#   name        = "efs-sg"
-#   description = "Security group for EFS"
-#   vpc_id      = aws_vpc.example.id
-
-#   ingress {
-#     from_port   = 2049
-#     to_port     = 2049
-#     protocol    = "tcp"
-#     cidr_blocks = ["0.0.0.0/0"]
-#   }
-
-#   egress {
-#     from_port   = 0
-#     to_port     = 0
-#     protocol    = "-1"
-#     cidr_blocks = ["0.0.0.0/0"]
-#   }
-# }
-
-# Create an S3 bucket as source
-module "source_bucket" {
-  source = "./modules/s3"
-  bucket_name = "source-bucket-${random_id.bucket_suffix.hex}"
-}
-
-# resource "aws_s3_bucket" "source_bucket" {
-#   bucket = "my-datasync-source-bucket-${random_id.bucket_suffix.hex}"
-#   tags = {
-#     Name = "DataSync Source Bucket"
-#   }
-# }
-
-# Create an EFS filesystem as destination
-module "efs"{
-  source = "./modules/efs"
-  creation_token = ""
-  name = "DataSync Destination EFS"
-  mount_targets = [
+# Private Subnets
+module "private_subnets" {
+  source = "./modules/vpc/subnets"
+  name   = "private-subnet"
+  subnets = [
     {
-      subnet_id       = module.subnets.subnet_ids[0]
-      security_groups = [module.sg.security_group_id]
+      subnet = "10.0.6.0/24"
+      az     = "us-east-1d"
+    },
+    {
+      subnet = "10.0.5.0/24"
+      az     = "us-east-1e"
+    },
+    {
+      subnet = "10.0.4.0/24"
+      az     = "us-east-1f"
     }
   ]
+  vpc_id                  = module.vpc.vpc_id
+  map_public_ip_on_launch = false
 }
-# resource "aws_efs_file_system" "destination_efs" {
-#   creation_token = "my-datasync-destination"
 
-#   tags = {
-#     Name = "DataSync Destination EFS"
-#   }
-# }
+# Public Route Table
+module "public_rt" {
+  source  = "./modules/vpc/route_tables"
+  name    = "public-route-table"
+  subnets = module.public_subnets.subnets[*]
+  routes = [
+    {
+      cidr_block         = "0.0.0.0/0"
+      gateway_id         = module.vpc.igw_id
+      nat_gateway_id     = ""
+      transit_gateway_id = ""
+    }
+  ]
+  vpc_id = module.vpc.vpc_id
+}
 
-# # Create a mount target for the EFS
-# resource "aws_efs_mount_target" "efs_mount" {
-#   file_system_id  = aws_efs_file_system.destination_efs.id
-#   subnet_id       = aws_subnet.example.id
-#   security_groups = [aws_security_group.efs_sg.id]
-# }
+# Private Route Table
+module "private_rt" {
+  source  = "./modules/vpc/route_tables"
+  name    = "private-route-table"
+  subnets = module.private_subnets.subnets[*]
+  routes  = []
+  vpc_id  = module.vpc.vpc_id
+}
+
+# -----------------------------------------------------------------------------------------
+# EFS Configuration
+# -----------------------------------------------------------------------------------------
+
+# Create an EFS filesystem as destination
+resource "aws_efs_file_system" "efs" {
+  creation_token = "my-efs"
+
+  tags = {
+    Name = "my-efs"
+  }
+}
+
+# -----------------------------------------------------------------------------------------
+# EC2 Configuration
+# -----------------------------------------------------------------------------------------
+
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["amazon"]
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
+# EC2 IAM Instance Profile
+data "aws_iam_policy_document" "instance_profile_assume_role" {
+  statement {
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
+
+    actions = ["sts:AssumeRole"]
+  }
+}
+
+resource "aws_iam_role" "instance_profile_iam_role" {
+  name               = "instance-profile-role"
+  path               = "/"
+  assume_role_policy = data.aws_iam_policy_document.instance_profile_assume_role.json
+}
+
+data "aws_iam_policy_document" "instance_profile_policy_document" {
+  statement {
+    effect    = "Allow"
+    actions   = ["s3:*"]
+    resources = ["*"]
+  }
+  statement {
+    effect    = "Allow"
+    actions   = ["cloudwatch:*"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "instance_profile_s3_policy" {
+  role   = aws_iam_role.instance_profile_iam_role.name
+  policy = data.aws_iam_policy_document.instance_profile_policy_document.json
+}
+
+resource "aws_iam_instance_profile" "iam_instance_profile" {
+  name = "iam-instance-profile"
+  role = aws_iam_role.instance_profile_iam_role.name
+}
+
+module "efs_mount_instance" {
+  source                      = "./modules/ec2"
+  name                        = "efs-mount-instance"
+  ami_id                      = data.aws_ami.ubuntu.id
+  instance_type               = "t2.micro"
+  key_name                    = "madmaxkeypair"
+  associate_public_ip_address = true
+  user_data                   = filebase64("${path.module}/scripts/user_data.sh")
+  instance_profile            = aws_iam_instance_profile.iam_instance_profile.name
+  subnet_id                   = module.public_subnets.subnets[0].id
+  security_groups             = [module.efs_sg.id]
+}
+
+# -----------------------------------------------------------------------------------------
+# S3 Configuration
+# -----------------------------------------------------------------------------------------
+
+module "destination_bucket" {
+  source             = "./modules/s3"
+  bucket_name        = "destination-bucket-${random_id.id.hex}"
+  objects            = []
+  versioning_enabled = "Enabled"
+  cors = [
+    {
+      allowed_headers = ["*"]
+      allowed_methods = ["PUT"]
+      allowed_origins = ["*"]
+      max_age_seconds = 3000
+    },
+    {
+      allowed_headers = ["*"]
+      allowed_methods = ["GET"]
+      allowed_origins = ["*"]
+      max_age_seconds = 3000
+    }
+  ]
+  bucket_policy = ""
+  force_destroy = true
+  bucket_notification = {
+    queue           = []
+    lambda_function = []
+  }
+}
+
+# -----------------------------------------------------------------------------------------
+# DataSync Configuration
+# -----------------------------------------------------------------------------------------
 
 # IAM role for DataSync
 module "datasync_role" {
-  source             = "../../modules/iam"
-  role_name          = "datasync_s3_efs_role}"
-  role_description   = "datasync_s3_efs_role}"
-  policy_name        = "datasync_s3_efs_policy_"
-  policy_description = "datasync_s3_efs_policy_"
+  source             = "./modules/iam"
+  role_name          = "datasync-s3-efs-role"
+  role_description   = "datasync-s3-efs-role"
+  policy_name        = "datasync-s3-efs-policy"
+  policy_description = "datasync-s3-efs-policy"
   assume_role_policy = <<EOF
     {
         "Version": "2012-10-17",
@@ -162,8 +283,8 @@ module "datasync_role" {
               ],
               "Effect" : "Allow",
               "Resource" : [
-                aws_s3_bucket.source_bucket.arn,
-                "${aws_s3_bucket.source_bucket.arn}/*"
+                "${module.destination_bucket.arn},
+                "${module.destination_bucket.arn}/*"
               ]
             },
             {
@@ -173,7 +294,7 @@ module "datasync_role" {
                 "elasticfilesystem:ClientRootAccess"
               ],
               "Effect"   : "Allow",
-              "Resource" : "${aws_efs_file_system.destination_efs.arn}"
+              "Resource" : "${aws_efs_file_system.efs.arn}"
             },
             {
               "Action" : [
@@ -191,99 +312,22 @@ module "datasync_role" {
     EOF
 }
 
-# resource "aws_iam_role" "datasync_role" {
-#   name = "DataSyncS3EFSRole"
-
-#   assume_role_policy = jsonencode({
-#     Version = "2012-10-17",
-#     Statement = [
-#       {
-#         Action = "sts:AssumeRole",
-#         Effect = "Allow",
-#         Principal = {
-#           Service = "datasync.amazonaws.com"
-#         }
-#       }
-#     ]
-#   })
-# }
-
-# # IAM policy for DataSync
-# resource "aws_iam_policy" "datasync_policy" {
-#   name        = "DataSyncS3EFSPolicy"
-#   description = "Policy for DataSync to access S3 and EFS"
-
-#   policy = jsonencode({
-#     Version = "2012-10-17",
-#     Statement = [
-#       {
-#         Action = [
-#           "s3:GetBucketLocation",
-#           "s3:ListBucket",
-#           "s3:ListBucketMultipartUploads",
-#           "s3:AbortMultipartUpload",
-#           "s3:DeleteObject",
-#           "s3:GetObject",
-#           "s3:ListMultipartUploadParts",
-#           "s3:PutObjectTagging",
-#           "s3:GetObjectTagging",
-#           "s3:PutObject"
-#         ],
-#         Effect = "Allow",
-#         Resource = [
-#           aws_s3_bucket.source_bucket.arn,
-#           "${aws_s3_bucket.source_bucket.arn}/*"
-#         ]
-#       },
-#       {
-#         Action = [
-#           "elasticfilesystem:ClientMount",
-#           "elasticfilesystem:ClientWrite",
-#           "elasticfilesystem:ClientRootAccess"
-#         ],
-#         Effect   = "Allow",
-#         Resource = aws_efs_file_system.destination_efs.arn
-#       },
-#       {
-#         Action = [
-#           "ec2:DescribeSubnets",
-#           "ec2:DescribeNetworkInterfaces",
-#           "ec2:CreateNetworkInterface",
-#           "ec2:DeleteNetworkInterface",
-#           "ec2:DescribeSecurityGroups"
-#         ],
-#         Effect   = "Allow",
-#         Resource = "*"
-#       }
-#     ]
-#   })
-# }
-
-# # Attach policy to role
-# resource "aws_iam_role_policy_attachment" "datasync_attach" {
-#   role       = aws_iam_role.datasync_role.name
-#   policy_arn = aws_iam_policy.datasync_policy.arn
-# }
-
 # Create S3 location for DataSync
 resource "aws_datasync_location_s3" "s3_location" {
-  s3_bucket_arn = aws_s3_bucket.source_bucket.arn
+  s3_bucket_arn = module.destination_bucket.arn
   subdirectory  = "/"
-
   s3_config {
-    bucket_access_role_arn = aws_iam_role.datasync_role.arn
+    bucket_access_role_arn = module.datasync_role.arn
   }
-
-  depends_on = [aws_iam_role_policy_attachment.datasync_attach]
 }
 
 # Create EFS location for DataSync
 resource "aws_datasync_location_efs" "efs_location" {
-  efs_file_system_arn = aws_efs_mount_target.efs_mount.file_system_arn
-  
+  efs_file_system_arn = aws_efs_file_system.efs.arn
+
   ec2_config {
-    security_group_arns = [aws_security_group.efs_sg.arn]
-    subnet_arn          = aws_subnet.example.arn
+    security_group_arns = [module.efs_sg.arn]
+    subnet_arn          = module.public_subnets.subnets[0].id
   }
 }
 
@@ -296,8 +340,8 @@ resource "aws_cloudwatch_log_group" "datasync_logs" {
 # Create DataSync task
 resource "aws_datasync_task" "s3_to_efs" {
   name                     = "s3-to-efs-sync"
-  source_location_arn      = aws_datasync_location_s3.s3_location.arn
-  destination_location_arn = aws_datasync_location_efs.efs_location.arn
+  source_location_arn      = aws_datasync_location_efs.efs_location.arn
+  destination_location_arn = aws_datasync_location_s3.s3_location.arn
 
   options {
     verify_mode            = "POINT_IN_TIME_CONSISTENT"

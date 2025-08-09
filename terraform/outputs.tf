@@ -1,9 +1,9 @@
 output "source_bucket_name" {
-  value = aws_s3_bucket.source_bucket.bucket
+  value = module.destination_bucket.bucket
 }
 
 output "efs_id" {
-  value = aws_efs_file_system.destination_efs.id
+  value = aws_efs_file_system.efs.id
 }
 
 output "datasync_task_arn" {
