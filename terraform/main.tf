@@ -272,6 +272,7 @@ module "datasync_role" {
               "Action" : [
                 "s3:GetBucketLocation",
                 "s3:ListBucket",
+                "s3:ListBucketV2",
                 "s3:ListBucketMultipartUploads",
                 "s3:AbortMultipartUpload",
                 "s3:DeleteObject",
@@ -327,7 +328,7 @@ resource "aws_datasync_location_efs" "efs_location" {
 
   ec2_config {
     security_group_arns = [module.efs_sg.arn]
-    subnet_arn          = module.public_subnets.subnets[0].id
+    subnet_arn          = module.public_subnets.subnets[0].arn
   }
 }
 
