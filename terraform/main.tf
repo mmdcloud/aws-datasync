@@ -133,6 +133,13 @@ resource "aws_efs_file_system" "efs" {
   }
 }
 
+resource "aws_efs_mount_target" "efs_mt" {
+  count = length(module.public_subnets.subnets)
+  file_system_id  = aws_efs_file_system.efs.id
+  subnet_id       = module.public_subnets.subnets[count.index].id
+  security_groups = [module.efs_sg.id]
+}
+
 # -----------------------------------------------------------------------------------------
 # EC2 Configuration
 # -----------------------------------------------------------------------------------------
@@ -284,7 +291,7 @@ module "datasync_role" {
               ],
               "Effect" : "Allow",
               "Resource" : [
-                "${module.destination_bucket.arn},
+                "${module.destination_bucket.arn}",
                 "${module.destination_bucket.arn}/*"
               ]
             },
