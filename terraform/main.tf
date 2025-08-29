@@ -134,11 +134,29 @@ resource "aws_efs_file_system" "efs" {
 }
 
 resource "aws_efs_mount_target" "efs_mt" {
-  count = length(module.public_subnets.subnets)
+  count           = length(module.public_subnets.subnets)
   file_system_id  = aws_efs_file_system.efs.id
   subnet_id       = module.public_subnets.subnets[count.index].id
   security_groups = [module.efs_sg.id]
 }
+
+# resource "aws_efs_mount_target" "efs_mt_public_1" {
+#   file_system_id  = aws_efs_file_system.efs.id
+#   subnet_id       = module.public_subnets.subnets[0].id
+#   security_groups = [module.efs_sg.id]
+# }
+
+# resource "aws_efs_mount_target" "efs_mt_public_2" {
+#   file_system_id  = aws_efs_file_system.efs.id
+#   subnet_id       = module.public_subnets.subnets[1].id
+#   security_groups = [module.efs_sg.id]
+# }
+
+# resource "aws_efs_mount_target" "efs_mt_public_3" {
+#   file_system_id  = aws_efs_file_system.efs.id
+#   subnet_id       = module.public_subnets.subnets[2].id
+#   security_groups = [module.efs_sg.id]
+# }
 
 # -----------------------------------------------------------------------------------------
 # EC2 Configuration
@@ -208,10 +226,12 @@ module "efs_mount_instance" {
   instance_type               = "t2.micro"
   key_name                    = "madmaxkeypair"
   associate_public_ip_address = true
-  user_data                   = filebase64("${path.module}/scripts/user_data.sh")
-  instance_profile            = aws_iam_instance_profile.iam_instance_profile.name
-  subnet_id                   = module.public_subnets.subnets[0].id
-  security_groups             = [module.efs_sg.id]
+  user_data = templatefile("${path.module}/scripts/user_data.sh", {
+    efs_id = "${aws_efs_file_system.efs.id}"
+  })
+  instance_profile = aws_iam_instance_profile.iam_instance_profile.name
+  subnet_id        = module.public_subnets.subnets[0].id
+  security_groups  = [module.efs_sg.id]
 }
 
 # -----------------------------------------------------------------------------------------
@@ -331,12 +351,14 @@ resource "aws_datasync_location_s3" "s3_location" {
 
 # Create EFS location for DataSync
 resource "aws_datasync_location_efs" "efs_location" {
+  count               = length(module.public_subnets.subnets)
   efs_file_system_arn = aws_efs_file_system.efs.arn
 
   ec2_config {
     security_group_arns = [module.efs_sg.arn]
-    subnet_arn          = module.public_subnets.subnets[0].arn
+    subnet_arn          = module.public_subnets.subnets[count.index].arn
   }
+  depends_on = [aws_efs_mount_target.efs_mt]
 }
 
 # Add this resource for CloudWatch Log Group
@@ -348,7 +370,7 @@ resource "aws_cloudwatch_log_group" "datasync_logs" {
 # Create DataSync task
 resource "aws_datasync_task" "s3_to_efs" {
   name                     = "s3-to-efs-sync"
-  source_location_arn      = aws_datasync_location_efs.efs_location.arn
+  source_location_arn      = aws_datasync_location_efs.efs_location[0].arn
   destination_location_arn = aws_datasync_location_s3.s3_location.arn
 
   options {
