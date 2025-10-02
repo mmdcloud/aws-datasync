@@ -1,4 +1,4 @@
-output "source_bucket_name" {
+output "destination_bucket_name" {
   value = module.destination_bucket.bucket
 }
 

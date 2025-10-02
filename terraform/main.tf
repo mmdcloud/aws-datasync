@@ -3,6 +3,8 @@ resource "random_id" "id" {
   byte_length = 4
 }
 
+data "aws_caller_identity" "current" {}
+
 # -----------------------------------------------------------------------------------------
 # VPC Configuration
 # -----------------------------------------------------------------------------------------
@@ -80,15 +82,15 @@ module "private_subnets" {
   subnets = [
     {
       subnet = "10.0.6.0/24"
-      az     = "us-east-1d"
+      az     = "us-east-1c"
     },
     {
       subnet = "10.0.5.0/24"
-      az     = "us-east-1e"
+      az     = "us-east-1b"
     },
     {
       subnet = "10.0.4.0/24"
-      az     = "us-east-1f"
+      az     = "us-east-1a"
     }
   ]
   vpc_id                  = module.vpc.vpc_id
@@ -126,10 +128,10 @@ module "private_rt" {
 
 # Create an EFS filesystem as destination
 resource "aws_efs_file_system" "efs" {
-  creation_token = "my-efs"
+  creation_token = "efs"
 
   tags = {
-    Name = "my-efs"
+    Name = "efs"
   }
 }
 
@@ -139,24 +141,6 @@ resource "aws_efs_mount_target" "efs_mt" {
   subnet_id       = module.public_subnets.subnets[count.index].id
   security_groups = [module.efs_sg.id]
 }
-
-# resource "aws_efs_mount_target" "efs_mt_public_1" {
-#   file_system_id  = aws_efs_file_system.efs.id
-#   subnet_id       = module.public_subnets.subnets[0].id
-#   security_groups = [module.efs_sg.id]
-# }
-
-# resource "aws_efs_mount_target" "efs_mt_public_2" {
-#   file_system_id  = aws_efs_file_system.efs.id
-#   subnet_id       = module.public_subnets.subnets[1].id
-#   security_groups = [module.efs_sg.id]
-# }
-
-# resource "aws_efs_mount_target" "efs_mt_public_3" {
-#   file_system_id  = aws_efs_file_system.efs.id
-#   subnet_id       = module.public_subnets.subnets[2].id
-#   security_groups = [module.efs_sg.id]
-# }
 
 # -----------------------------------------------------------------------------------------
 # EC2 Configuration
@@ -351,12 +335,10 @@ resource "aws_datasync_location_s3" "s3_location" {
 
 # Create EFS location for DataSync
 resource "aws_datasync_location_efs" "efs_location" {
-  count               = length(module.public_subnets.subnets)
   efs_file_system_arn = aws_efs_file_system.efs.arn
-
   ec2_config {
     security_group_arns = [module.efs_sg.arn]
-    subnet_arn          = module.public_subnets.subnets[count.index].arn
+    subnet_arn          = module.public_subnets.subnets[0].arn
   }
   depends_on = [aws_efs_mount_target.efs_mt]
 }
@@ -370,7 +352,7 @@ resource "aws_cloudwatch_log_group" "datasync_logs" {
 # Create DataSync task
 resource "aws_datasync_task" "s3_to_efs" {
   name                     = "s3-to-efs-sync"
-  source_location_arn      = aws_datasync_location_efs.efs_location[0].arn
+  source_location_arn      = aws_datasync_location_efs.efs_location.arn
   destination_location_arn = aws_datasync_location_s3.s3_location.arn
 
   options {
