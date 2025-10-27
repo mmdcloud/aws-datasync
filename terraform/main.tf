@@ -1,151 +1,90 @@
+data "aws_caller_identity" "current" {}
+
+# -----------------------------------------------------------------------------------------
 # Random suffix for bucket name
+# -----------------------------------------------------------------------------------------
 resource "random_id" "id" {
   byte_length = 4
 }
 
-data "aws_caller_identity" "current" {}
-
 # -----------------------------------------------------------------------------------------
 # VPC Configuration
 # -----------------------------------------------------------------------------------------
-
 module "vpc" {
-  source                = "./modules/vpc/vpc"
-  vpc_name              = "vpc"
-  vpc_cidr_block        = "10.0.0.0/16"
-  enable_dns_hostnames  = true
-  enable_dns_support    = true
-  internet_gateway_name = "vpc_igw"
+  source = "./modules/vpc"
+  name = "vpc"
+  cidr = "10.0.0.0/16"
+  azs             = var.azs
+  public_subnets  = var.public_subnets
+  private_subnets = var.private_subnets
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+  create_igw = true
+  map_public_ip_on_launch = true
+  enable_nat_gateway     = false
+  single_nat_gateway     = false
+  one_nat_gateway_per_az = false
+  tags = {
+    Environment = "prod"
+    Project     = "airflow-ha"
+  }
 }
 
 # Security Group
-module "efs_sg" {
-  source = "./modules/vpc/security_groups"
-  vpc_id = module.vpc.vpc_id
-  name   = "efs-sg"
-  ingress = [
-    {
-      from_port       = 2049
-      to_port         = 2049
-      protocol        = "tcp"
-      self            = "false"
-      cidr_blocks     = ["0.0.0.0/0"]
-      security_groups = []
-      description     = "any"
-    },
-    {
-      from_port       = 22
-      to_port         = 22
-      protocol        = "tcp"
-      self            = "false"
-      cidr_blocks     = ["0.0.0.0/0"]
-      security_groups = []
-      description     = "any"
-    }
-  ]
-  egress = [
-    {
-      from_port   = 0
-      to_port     = 0
-      protocol    = "-1"
-      cidr_blocks = ["0.0.0.0/0"]
-    }
-  ]
-}
 
-# Public Subnets
-module "public_subnets" {
-  source = "./modules/vpc/subnets"
-  name   = "public-subnet"
-  subnets = [
-    {
-      subnet = "10.0.1.0/24"
-      az     = "us-east-1a"
-    },
-    {
-      subnet = "10.0.2.0/24"
-      az     = "us-east-1b"
-    },
-    {
-      subnet = "10.0.3.0/24"
-      az     = "us-east-1c"
-    }
-  ]
-  vpc_id                  = module.vpc.vpc_id
-  map_public_ip_on_launch = true
-}
+resource "aws_security_group" "efs_sg" {
+  name        = "efs-sg"
+  description = "EFS access and SSH"
+  vpc_id      = module.vpc.vpc_id
 
-# Private Subnets
-module "private_subnets" {
-  source = "./modules/vpc/subnets"
-  name   = "private-subnet"
-  subnets = [
-    {
-      subnet = "10.0.6.0/24"
-      az     = "us-east-1c"
-    },
-    {
-      subnet = "10.0.5.0/24"
-      az     = "us-east-1b"
-    },
-    {
-      subnet = "10.0.4.0/24"
-      az     = "us-east-1a"
-    }
-  ]
-  vpc_id                  = module.vpc.vpc_id
-  map_public_ip_on_launch = false
-}
+  ingress {
+    description = "NFS access"
+    from_port   = 2049
+    to_port     = 2049
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
-# Public Route Table
-module "public_rt" {
-  source  = "./modules/vpc/route_tables"
-  name    = "public-route-table"
-  subnets = module.public_subnets.subnets[*]
-  routes = [
-    {
-      cidr_block         = "0.0.0.0/0"
-      gateway_id         = module.vpc.igw_id
-      nat_gateway_id     = ""
-      transit_gateway_id = ""
-    }
-  ]
-  vpc_id = module.vpc.vpc_id
-}
+  ingress {
+    description = "SSH access"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
-# Private Route Table
-module "private_rt" {
-  source  = "./modules/vpc/route_tables"
-  name    = "private-route-table"
-  subnets = module.private_subnets.subnets[*]
-  routes  = []
-  vpc_id  = module.vpc.vpc_id
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "efs-sg"
+  }
 }
 
 # -----------------------------------------------------------------------------------------
 # EFS Configuration
 # -----------------------------------------------------------------------------------------
-
-# Create an EFS filesystem as destination
 resource "aws_efs_file_system" "efs" {
   creation_token = "efs"
-
   tags = {
     Name = "efs"
   }
 }
 
 resource "aws_efs_mount_target" "efs_mt" {
-  count           = length(module.public_subnets.subnets)
+  count           = length(var.public_subnets)
   file_system_id  = aws_efs_file_system.efs.id
-  subnet_id       = module.public_subnets.subnets[count.index].id
-  security_groups = [module.efs_sg.id]
+  subnet_id       = module.vpc.public_subnets[count.index]
+  security_groups = [aws_security_group.efs_sg.id]
 }
 
 # -----------------------------------------------------------------------------------------
 # EC2 Configuration
 # -----------------------------------------------------------------------------------------
-
 data "aws_ami" "ubuntu" {
   most_recent = true
   owners      = ["amazon"]
@@ -214,14 +153,13 @@ module "efs_mount_instance" {
     efs_id = "${aws_efs_file_system.efs.id}"
   })
   instance_profile = aws_iam_instance_profile.iam_instance_profile.name
-  subnet_id        = module.public_subnets.subnets[0].id
-  security_groups  = [module.efs_sg.id]
+  subnet_id        = module.vpc.public_subnets[0]
+  security_groups  = [aws_security_group.efs_sg.id]
 }
 
 # -----------------------------------------------------------------------------------------
 # S3 Configuration
 # -----------------------------------------------------------------------------------------
-
 module "destination_bucket" {
   source             = "./modules/s3"
   bucket_name        = "destination-bucket-${random_id.id.hex}"
@@ -252,8 +190,6 @@ module "destination_bucket" {
 # -----------------------------------------------------------------------------------------
 # DataSync Configuration
 # -----------------------------------------------------------------------------------------
-
-# IAM role for DataSync
 module "datasync_role" {
   source             = "./modules/iam"
   role_name          = "datasync-s3-efs-role"
@@ -324,7 +260,7 @@ module "datasync_role" {
     EOF
 }
 
-# Create S3 location for DataSync
+# S3 location for DataSync (Destination)
 resource "aws_datasync_location_s3" "s3_location" {
   s3_bucket_arn = module.destination_bucket.arn
   subdirectory  = "/"
@@ -333,28 +269,27 @@ resource "aws_datasync_location_s3" "s3_location" {
   }
 }
 
-# Create EFS location for DataSync
+# EFS location for DataSync (Source)
 resource "aws_datasync_location_efs" "efs_location" {
   efs_file_system_arn = aws_efs_file_system.efs.arn
   ec2_config {
-    security_group_arns = [module.efs_sg.arn]
-    subnet_arn          = module.public_subnets.subnets[0].arn
+    security_group_arns = [aws_security_group.efs_sg.id]
+    subnet_arn          = "arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}:subnet/${module.vpc.public_subnets[0]}"
   }
   depends_on = [aws_efs_mount_target.efs_mt]
 }
 
-# Add this resource for CloudWatch Log Group
+# CloudWatch Log Group
 resource "aws_cloudwatch_log_group" "datasync_logs" {
   name              = "/aws/datasync/s3-to-efs-sync"
   retention_in_days = 7
 }
 
-# Create DataSync task
+# DataSync task
 resource "aws_datasync_task" "s3_to_efs" {
   name                     = "s3-to-efs-sync"
   source_location_arn      = aws_datasync_location_efs.efs_location.arn
   destination_location_arn = aws_datasync_location_s3.s3_location.arn
-
   options {
     verify_mode            = "POINT_IN_TIME_CONSISTENT"
     preserve_deleted_files = "PRESERVE"
@@ -367,9 +302,7 @@ resource "aws_datasync_task" "s3_to_efs" {
     task_queueing          = "ENABLED"
     log_level              = "TRANSFER"
   }
-
   cloudwatch_log_group_arn = aws_cloudwatch_log_group.datasync_logs.arn
-
   depends_on = [
     aws_datasync_location_s3.s3_location,
     aws_datasync_location_efs.efs_location
