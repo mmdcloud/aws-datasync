@@ -12,8 +12,8 @@ resource "random_id" "id" {
 # -----------------------------------------------------------------------------------------
 module "vpc" {
   source = "./modules/vpc"
-  name = "vpc"
-  cidr = "10.0.0.0/16"
+  vpc_name = "vpc"
+  vpc_cidr = "10.0.0.0/16"
   azs             = var.azs
   public_subnets  = var.public_subnets
   private_subnets = var.private_subnets
@@ -31,7 +31,6 @@ module "vpc" {
 }
 
 # Security Group
-
 resource "aws_security_group" "efs_sg" {
   name        = "efs-sg"
   description = "EFS access and SSH"
