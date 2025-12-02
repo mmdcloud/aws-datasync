@@ -11,22 +11,22 @@ resource "random_id" "id" {
 # VPC Configuration
 # -----------------------------------------------------------------------------------------
 module "vpc" {
-  source = "./modules/vpc"
-  vpc_name = "vpc"
-  vpc_cidr = "10.0.0.0/16"
-  azs             = var.azs
-  public_subnets  = var.public_subnets
-  private_subnets = var.private_subnets
-  enable_dns_hostnames = true
-  enable_dns_support   = true
-  create_igw = true
+  source                  = "./modules/vpc"
+  vpc_name                = "vpc"
+  vpc_cidr                = "10.0.0.0/16"
+  azs                     = var.azs
+  public_subnets          = var.public_subnets
+  private_subnets         = var.private_subnets
+  enable_dns_hostnames    = true
+  enable_dns_support      = true
+  create_igw              = true
   map_public_ip_on_launch = true
-  enable_nat_gateway     = false
-  single_nat_gateway     = false
-  one_nat_gateway_per_az = false
+  enable_nat_gateway      = false
+  single_nat_gateway      = false
+  one_nat_gateway_per_az  = false
   tags = {
     Environment = "prod"
-    Project     = "airflow-ha"
+    Project     = "efs-to-s3-datasync"
   }
 }
 
@@ -272,7 +272,7 @@ resource "aws_datasync_location_s3" "s3_location" {
 resource "aws_datasync_location_efs" "efs_location" {
   efs_file_system_arn = aws_efs_file_system.efs.arn
   ec2_config {
-    security_group_arns = [aws_security_group.efs_sg.id]
+    security_group_arns = [aws_security_group.efs_sg.arn]
     subnet_arn          = "arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}:subnet/${module.vpc.public_subnets[0]}"
   }
   depends_on = [aws_efs_mount_target.efs_mt]
