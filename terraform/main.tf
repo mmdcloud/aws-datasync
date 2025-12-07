@@ -189,12 +189,12 @@ module "destination_bucket" {
 # -----------------------------------------------------------------------------------------
 # DataSync Configuration
 # -----------------------------------------------------------------------------------------
-module "datasync_role" {
+module "s3_access_role" {
   source             = "./modules/iam"
-  role_name          = "datasync-s3-efs-role"
-  role_description   = "datasync-s3-efs-role"
-  policy_name        = "datasync-s3-efs-policy"
-  policy_description = "datasync-s3-efs-policy"
+  role_name          = "datasync-s3-access-role"
+  role_description   = "datasync-s3-access-role"
+  policy_name        = "datasync-s3-access-policy"
+  policy_description = "datasync-s3-access-policy"
   assume_role_policy = <<EOF
     {
         "Version": "2012-10-17",
@@ -236,9 +236,51 @@ module "datasync_role" {
             },
             {
               "Action" : [
+                "ec2:DescribeSubnets",
+                "ec2:DescribeNetworkInterfaces",
+                "ec2:CreateNetworkInterface",
+                "ec2:DeleteNetworkInterface",
+                "ec2:DescribeSecurityGroups"
+              ],
+              "Effect"   : "Allow",
+              "Resource" : "*"
+            }
+        ]
+    }
+    EOF
+}
+
+module "efs_access_role" {
+  source             = "./modules/iam"
+  role_name          = "datasync-efs-access-role"
+  role_description   = "datasync-efs-access-role"
+  policy_name        = "datasync-efs-access-policy"
+  policy_description = "datasync-efs-access-policy"
+  assume_role_policy = <<EOF
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Action": "sts:AssumeRole",
+                "Principal": {
+                  "Service": "datasync.amazonaws.com"
+                },
+                "Effect": "Allow",
+                "Sid": ""
+            }
+        ]
+    }
+    EOF
+  policy             = <<EOF
+    {
+        "Version": "2012-10-17",
+        "Statement": [            
+            {
+              "Action" : [
                 "elasticfilesystem:ClientMount",
                 "elasticfilesystem:ClientWrite",
-                "elasticfilesystem:ClientRootAccess"
+                "elasticfilesystem:ClientRootAccess",
+                "elasticfilesystem:ClientRead"
               ],
               "Effect"   : "Allow",
               "Resource" : "${aws_efs_file_system.efs.arn}"
@@ -264,17 +306,20 @@ resource "aws_datasync_location_s3" "s3_location" {
   s3_bucket_arn = module.destination_bucket.arn
   subdirectory  = "/"
   s3_config {
-    bucket_access_role_arn = module.datasync_role.arn
+    bucket_access_role_arn = module.s3_access_role.arn
   }
 }
 
 # EFS location for DataSync (Source)
 resource "aws_datasync_location_efs" "efs_location" {
-  efs_file_system_arn = aws_efs_file_system.efs.arn
+  efs_file_system_arn         = aws_efs_file_system.efs.arn
+  file_system_access_role_arn = module.efs_access_role.arn
+  subdirectory                = "/"
   ec2_config {
     security_group_arns = [aws_security_group.efs_sg.arn]
     subnet_arn          = "arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}:subnet/${module.vpc.public_subnets[0]}"
   }
+  in_transit_encryption = "TLS1_2"
   depends_on = [aws_efs_mount_target.efs_mt]
 }
 
@@ -305,5 +350,5 @@ resource "aws_datasync_task" "s3_to_efs" {
   depends_on = [
     aws_datasync_location_s3.s3_location,
     aws_datasync_location_efs.efs_location
-  ]
+  ]  
 }
