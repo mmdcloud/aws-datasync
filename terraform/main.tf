@@ -31,34 +31,37 @@ module "vpc" {
 }
 
 # Security Group
-resource "aws_security_group" "efs_sg" {
-  name        = "efs-sg"
-  description = "EFS access and SSH"
-  vpc_id      = module.vpc.vpc_id
-
-  ingress {
-    description = "NFS access"
-    from_port   = 2049
-    to_port     = 2049
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "SSH access"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
+module "efs_sg" {
+  source = "./modules/security-groups"
+  name   = "efs-sg"
+  vpc_id = module.vpc.vpc_id
+  ingress_rules = [
+    {
+      description     = "NFS access"
+      from_port       = 2049
+      to_port         = 2049
+      protocol        = "tcp"
+      security_groups = []
+      cidr_blocks     = ["0.0.0.0/0"]
+    },
+    {
+      description     = "SSH access"
+      from_port       = 22
+      to_port         = 22
+      protocol        = "tcp"
+      security_groups = []
+      cidr_blocks     = ["0.0.0.0/0"]
+    }
+  ]
+  egress_rules = [
+    {
+      description = "Allow all outbound traffic"
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
   tags = {
     Name = "efs-sg"
   }
@@ -78,7 +81,7 @@ resource "aws_efs_mount_target" "efs_mt" {
   count           = length(var.public_subnets)
   file_system_id  = aws_efs_file_system.efs.id
   subnet_id       = module.vpc.public_subnets[count.index]
-  security_groups = [aws_security_group.efs_sg.id]
+  security_groups = [module.efs_sg.id]
 }
 
 # -----------------------------------------------------------------------------------------
@@ -99,46 +102,53 @@ data "aws_ami" "ubuntu" {
 }
 
 # EC2 IAM Instance Profile
-data "aws_iam_policy_document" "instance_profile_assume_role" {
-  statement {
-    effect = "Allow"
-
-    principals {
-      type        = "Service"
-      identifiers = ["ec2.amazonaws.com"]
+module "instance_profile_role" {
+  source             = "./modules/iam"
+  role_name          = "instance-profile-role"
+  role_description   = "Instance Profile IAM Role"
+  policy_name        = "instance-profile-role-policy"
+  policy_description = "Instance Profile IAM Role Policy"
+  assume_role_policy = <<EOF
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Action": "sts:AssumeRole",
+                "Principal": {
+                  "Service": "datasync.amazonaws.com"
+                },
+                "Effect": "Allow",
+                "Sid": ""
+            }
+        ]
     }
-
-    actions = ["sts:AssumeRole"]
-  }
-}
-
-resource "aws_iam_role" "instance_profile_iam_role" {
-  name               = "instance-profile-role"
-  path               = "/"
-  assume_role_policy = data.aws_iam_policy_document.instance_profile_assume_role.json
-}
-
-data "aws_iam_policy_document" "instance_profile_policy_document" {
-  statement {
-    effect    = "Allow"
-    actions   = ["s3:*"]
-    resources = ["*"]
-  }
-  statement {
-    effect    = "Allow"
-    actions   = ["cloudwatch:*"]
-    resources = ["*"]
-  }
-}
-
-resource "aws_iam_role_policy" "instance_profile_s3_policy" {
-  role   = aws_iam_role.instance_profile_iam_role.name
-  policy = data.aws_iam_policy_document.instance_profile_policy_document.json
+    EOF
+  policy             = <<EOF
+    {
+        "Version": "2012-10-17",
+        "Statement": [            
+            {
+              "Action" : [
+                "s3:*",                
+              ],
+              "Effect"   : "Allow",
+              "Resource" : "*"
+            },
+            {
+              "Action" : [
+                "cloudwatch:*",                
+              ],
+              "Effect"   : "Allow",
+              "Resource" : "*"
+            },
+        ]
+    }
+    EOF
 }
 
 resource "aws_iam_instance_profile" "iam_instance_profile" {
   name = "iam-instance-profile"
-  role = aws_iam_role.instance_profile_iam_role.name
+  role = module.instance_profile.name
 }
 
 module "efs_mount_instance" {
@@ -153,7 +163,7 @@ module "efs_mount_instance" {
   })
   instance_profile = aws_iam_instance_profile.iam_instance_profile.name
   subnet_id        = module.vpc.public_subnets[0]
-  security_groups  = [aws_security_group.efs_sg.id]
+  security_groups  = [module.efs_sg.id]
 }
 
 # -----------------------------------------------------------------------------------------
@@ -316,7 +326,7 @@ resource "aws_datasync_location_efs" "efs_location" {
   file_system_access_role_arn = module.efs_access_role.arn
   subdirectory                = "/"
   ec2_config {
-    security_group_arns = [aws_security_group.efs_sg.arn]
+    security_group_arns = [module.efs_sg.arn]
     subnet_arn          = "arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}:subnet/${module.vpc.public_subnets[0]}"
   }
   in_transit_encryption = "TLS1_2"
