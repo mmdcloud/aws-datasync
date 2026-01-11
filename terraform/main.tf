@@ -43,6 +43,7 @@ module "efs_sg" {
       protocol        = "tcp"
       security_groups = []
       cidr_blocks     = ["0.0.0.0/0"]
+      self            = true
     },
     {
       description     = "SSH access"
@@ -71,9 +72,13 @@ module "efs_sg" {
 # EFS Configuration
 # -----------------------------------------------------------------------------------------
 resource "aws_efs_file_system" "efs" {
-  creation_token = "efs"
+  creation_token   = "efs"
+  encrypted        = true
+  performance_mode = "generalPurpose"
+  throughput_mode  = "bursting"
   tags = {
-    Name = "efs"
+    Name        = "efs-datasync"
+    Environment = "prod"
   }
 }
 
@@ -115,7 +120,7 @@ module "instance_profile_role" {
             {
                 "Action": "sts:AssumeRole",
                 "Principal": {
-                  "Service": "datasync.amazonaws.com"
+                  "Service": "ec2.amazonaws.com"
                 },
                 "Effect": "Allow",
                 "Sid": ""
@@ -129,18 +134,25 @@ module "instance_profile_role" {
         "Statement": [            
             {
               "Action" : [
-                "s3:*",                
+                "s3:*"              
               ],
               "Effect"   : "Allow",
               "Resource" : "*"
             },
             {
               "Action" : [
-                "cloudwatch:*",                
+                "cloudwatch:*"                
               ],
               "Effect"   : "Allow",
               "Resource" : "*"
             },
+            {
+              "Action" : [
+                "datasync:*"
+              ],
+              "Effect"   : "Allow",
+              "Resource" : "*"
+            }
         ]
     }
     EOF
@@ -148,7 +160,7 @@ module "instance_profile_role" {
 
 resource "aws_iam_instance_profile" "iam_instance_profile" {
   name = "iam-instance-profile"
-  role = module.instance_profile.name
+  role = module.instance_profile_role.name
 }
 
 module "efs_mount_instance" {
@@ -164,6 +176,9 @@ module "efs_mount_instance" {
   instance_profile = aws_iam_instance_profile.iam_instance_profile.name
   subnet_id        = module.vpc.public_subnets[0]
   security_groups  = [module.efs_sg.id]
+  depends_on = [
+    aws_efs_mount_target.efs_mt
+  ]
 }
 
 # -----------------------------------------------------------------------------------------
@@ -228,8 +243,13 @@ module "s3_access_role" {
               "Action" : [
                 "s3:GetBucketLocation",
                 "s3:ListBucket",
-                "s3:ListBucketV2",
-                "s3:ListBucketMultipartUploads",
+                "s3:ListBucketMultipartUploads"
+              ],
+              "Effect" : "Allow",
+              "Resource" : "${module.destination_bucket.arn}"
+            },
+            {
+              "Action" : [
                 "s3:AbortMultipartUpload",
                 "s3:DeleteObject",
                 "s3:GetObject",
@@ -239,21 +259,7 @@ module "s3_access_role" {
                 "s3:PutObject"
               ],
               "Effect" : "Allow",
-              "Resource" : [
-                "${module.destination_bucket.arn}",
-                "${module.destination_bucket.arn}/*"
-              ]
-            },
-            {
-              "Action" : [
-                "ec2:DescribeSubnets",
-                "ec2:DescribeNetworkInterfaces",
-                "ec2:CreateNetworkInterface",
-                "ec2:DeleteNetworkInterface",
-                "ec2:DescribeSecurityGroups"
-              ],
-              "Effect"   : "Allow",
-              "Resource" : "*"
+              "Resource" : "${module.destination_bucket.arn}/*"
             }
         ]
     }
@@ -290,7 +296,7 @@ module "efs_access_role" {
                 "elasticfilesystem:ClientMount",
                 "elasticfilesystem:ClientWrite",
                 "elasticfilesystem:ClientRootAccess",
-                "elasticfilesystem:ClientRead"
+                "elasticfilesystem:DescribeMountTargets"
               ],
               "Effect"   : "Allow",
               "Resource" : "${aws_efs_file_system.efs.arn}"
@@ -301,7 +307,8 @@ module "efs_access_role" {
                 "ec2:DescribeNetworkInterfaces",
                 "ec2:CreateNetworkInterface",
                 "ec2:DeleteNetworkInterface",
-                "ec2:DescribeSecurityGroups"
+                "ec2:DescribeSecurityGroups",
+                "ec2:DescribeNetworkInterfaceAttribute"
               ],
               "Effect"   : "Allow",
               "Resource" : "*"
@@ -314,6 +321,7 @@ module "efs_access_role" {
 # S3 location for DataSync (Destination)
 resource "aws_datasync_location_s3" "s3_location" {
   s3_bucket_arn = module.destination_bucket.arn
+  s3_storage_class = "STANDARD"
   subdirectory  = "/"
   s3_config {
     bucket_access_role_arn = module.s3_access_role.arn
@@ -330,35 +338,39 @@ resource "aws_datasync_location_efs" "efs_location" {
     subnet_arn          = "arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}:subnet/${module.vpc.public_subnets[0]}"
   }
   in_transit_encryption = "TLS1_2"
-  depends_on = [aws_efs_mount_target.efs_mt]
+  depends_on            = [aws_efs_mount_target.efs_mt]
 }
 
 # CloudWatch Log Group
-resource "aws_cloudwatch_log_group" "datasync_logs" {
-  name              = "/aws/datasync/s3-to-efs-sync"
+module "datasync_logs" {
+  source            = "./modules/cloudwatch/cloudwatch-log-group"
+  log_group_name    = "/aws/datasync/s3-to-efs-sync"
   retention_in_days = 7
 }
 
-# DataSync task
+# DataSync task - DO NOT create automatically, trigger manually after EC2 populates EFS
 resource "aws_datasync_task" "s3_to_efs" {
-  name                     = "s3-to-efs-sync"
+  name                     = "efs-to-s3-sync"
   source_location_arn      = aws_datasync_location_efs.efs_location.arn
   destination_location_arn = aws_datasync_location_s3.s3_location.arn
   options {
-    verify_mode            = "POINT_IN_TIME_CONSISTENT"
-    preserve_deleted_files = "PRESERVE"
+    verify_mode            = "ONLY_FILES_TRANSFERRED"
+    preserve_deleted_files = "REMOVE"
     preserve_devices       = "NONE"
     posix_permissions      = "PRESERVE"
-    uid                    = "NONE"
-    gid                    = "NONE"
+    uid                    = "INT_VALUE"
+    gid                    = "INT_VALUE"
     atime                  = "BEST_EFFORT"
     mtime                  = "PRESERVE"
+    transfer_mode          = "CHANGED"
+    overwrite_mode         = "ALWAYS"
     task_queueing          = "ENABLED"
     log_level              = "TRANSFER"
   }
-  cloudwatch_log_group_arn = aws_cloudwatch_log_group.datasync_logs.arn
+  cloudwatch_log_group_arn = module.datasync_logs.arn
   depends_on = [
     aws_datasync_location_s3.s3_location,
-    aws_datasync_location_efs.efs_location
-  ]  
+    aws_datasync_location_efs.efs_location,
+    module.efs_mount_instance
+  ]
 }
