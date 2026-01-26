@@ -1,4 +1,4 @@
-# EFS to S3 DataSync Infrastructure
+# 🚀 EFS to S3 DataSync Infrastructure
 
 Production-grade Terraform infrastructure for automated synchronization of Amazon Elastic File System (EFS) data to Amazon S3 using AWS DataSync.
 
