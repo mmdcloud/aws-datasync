@@ -42,8 +42,8 @@ module "efs_sg" {
       to_port         = 2049
       protocol        = "tcp"
       security_groups = []
-      cidr_blocks     = ["0.0.0.0/0"]
-      self            = true
+      cidr_blocks     = ["10.0.0.0/16"]
+      self            = true 
     },
     {
       description     = "SSH access"
@@ -171,7 +171,7 @@ module "efs_mount_instance" {
   key_name                    = "madmaxkeypair"
   associate_public_ip_address = true
   user_data = templatefile("${path.module}/scripts/user_data.sh", {
-    efs_id = "${aws_efs_file_system.efs.id}"
+    efs_id = aws_efs_file_system.efs.id
   })
   instance_profile = aws_iam_instance_profile.iam_instance_profile.name
   subnet_id        = module.vpc.public_subnets[0]
@@ -203,7 +203,34 @@ module "destination_bucket" {
       max_age_seconds = 3000
     }
   ]
-  bucket_policy = ""
+  bucket_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "DataSyncAccess"
+        Effect = "Allow"
+        Principal = {
+          AWS = module.s3_access_role.arn
+        }
+        Action = [
+          "s3:GetBucketLocation",
+          "s3:ListBucket",
+          "s3:ListBucketMultipartUploads",
+          "s3:AbortMultipartUpload",
+          "s3:DeleteObject",
+          "s3:GetObject",
+          "s3:ListMultipartUploadParts",
+          "s3:PutObject",
+          "s3:PutObjectTagging",
+          "s3:GetObjectTagging"
+        ]
+        Resource = [
+          "arn:aws:s3:::destination-bucket-${random_id.id.hex}",
+          "arn:aws:s3:::destination-bucket-${random_id.id.hex}/*"
+        ]
+      }
+    ]
+  })
   force_destroy = true
   bucket_notification = {
     queue           = []
@@ -320,9 +347,9 @@ module "efs_access_role" {
 
 # S3 location for DataSync (Destination)
 resource "aws_datasync_location_s3" "s3_location" {
-  s3_bucket_arn = module.destination_bucket.arn
+  s3_bucket_arn    = module.destination_bucket.arn
   s3_storage_class = "STANDARD"
-  subdirectory  = "/"
+  subdirectory     = "/"
   s3_config {
     bucket_access_role_arn = module.s3_access_role.arn
   }
@@ -334,7 +361,7 @@ resource "aws_datasync_location_efs" "efs_location" {
   file_system_access_role_arn = module.efs_access_role.arn
   subdirectory                = "/"
   ec2_config {
-    security_group_arns = [module.efs_sg.arn]
+    security_group_arns = ["arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}:security-group/${module.efs_sg.id}"]
     subnet_arn          = "arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}:subnet/${module.vpc.public_subnets[0]}"
   }
   in_transit_encryption = "TLS1_2"
