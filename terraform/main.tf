@@ -43,7 +43,7 @@ module "efs_sg" {
       protocol        = "tcp"
       security_groups = []
       cidr_blocks     = ["10.0.0.0/16"]
-      self            = true 
+      self            = true
     },
     {
       description     = "SSH access"
@@ -355,11 +355,30 @@ resource "aws_datasync_location_s3" "s3_location" {
   }
 }
 
+resource "aws_efs_access_point" "datasync_ap" {
+  file_system_id = aws_efs_file_system.efs.id
+
+  posix_user {
+    gid = 1000
+    uid = 1000
+  }
+
+  root_directory {
+    path = "/data"
+    creation_info {
+      owner_gid   = 1000
+      owner_uid   = 1000
+      permissions = "755"
+    }
+  }
+}
+
 # EFS location for DataSync (Source)
 resource "aws_datasync_location_efs" "efs_location" {
   efs_file_system_arn         = aws_efs_file_system.efs.arn
   file_system_access_role_arn = module.efs_access_role.arn
-  subdirectory                = "/"
+  access_point_arn            = aws_efs_access_point.datasync_ap.arn
+  subdirectory                = "/data"
   ec2_config {
     security_group_arns = ["arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}:security-group/${module.efs_sg.id}"]
     subnet_arn          = "arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}:subnet/${module.vpc.public_subnets[0]}"
@@ -385,8 +404,8 @@ resource "aws_datasync_task" "s3_to_efs" {
     preserve_deleted_files = "REMOVE"
     preserve_devices       = "NONE"
     posix_permissions      = "PRESERVE"
-    uid                    = "INT_VALUE"
-    gid                    = "INT_VALUE"
+    uid                    = "NONE"
+    gid                    = "NONE"
     atime                  = "BEST_EFFORT"
     mtime                  = "PRESERVE"
     transfer_mode          = "CHANGED"
