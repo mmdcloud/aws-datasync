@@ -68,27 +68,6 @@ module "efs_sg" {
   }
 }
 
-# -----------------------------------------------------------------------------------------
-# EFS Configuration
-# -----------------------------------------------------------------------------------------
-# resource "aws_efs_file_system" "efs" {
-#   creation_token   = "efs"
-#   encrypted        = true
-#   performance_mode = "generalPurpose"
-#   throughput_mode  = "bursting"
-#   tags = {
-#     Name        = "efs-datasync"
-#     Environment = "prod"
-#   }
-# }
-
-# resource "aws_efs_mount_target" "efs_mt" {
-#   count           = length(var.public_subnets)
-#   file_system_id  = aws_efs_file_system.efs.id
-#   subnet_id       = module.vpc.public_subnets[count.index]
-#   security_groups = [module.efs_sg.id]
-# }
-
 module "efs" {
   source             = "./modules/efs"
   name               = "efs-datasync"
@@ -105,7 +84,7 @@ module "efs" {
     uid = 1000
   }
   access_point_root_directory = {
-    path        = "/data"
+    path        = "/"
     owner_gid   = 1000
     owner_uid   = 1000
     permissions = "755"
@@ -202,7 +181,7 @@ module "efs_mount_instance" {
   })
   instance_profile = aws_iam_instance_profile.iam_instance_profile.name
   subnet_id        = module.vpc.public_subnets[0]
-  security_groups  = [module.efs_sg.id]  
+  security_groups  = [module.efs_sg.id]
 }
 
 # -----------------------------------------------------------------------------------------
@@ -369,81 +348,12 @@ module "efs_access_role" {
     EOF
 }
 
-# S3 location for DataSync (Destination)
-# resource "aws_datasync_location_s3" "s3_location" {
-#   s3_bucket_arn    = module.destination_bucket.arn
-#   s3_storage_class = "STANDARD"
-#   subdirectory     = "/"
-#   s3_config {
-#     bucket_access_role_arn = module.s3_access_role.arn
-#   }
-# }
-
-# resource "aws_efs_access_point" "datasync_ap" {
-#   file_system_id = aws_efs_file_system.efs.id
-
-#   posix_user {
-#     gid = 1000
-#     uid = 1000
-#   }
-
-#   root_directory {
-#     path = "/data"
-#     creation_info {
-#       owner_gid   = 1000
-#       owner_uid   = 1000
-#       permissions = "755"
-#     }
-#   }
-# }
-
-# # EFS location for DataSync (Source)
-# resource "aws_datasync_location_efs" "efs_location" {
-#   efs_file_system_arn         = aws_efs_file_system.efs.arn
-#   file_system_access_role_arn = module.efs_access_role.arn
-#   access_point_arn            = aws_efs_access_point.datasync_ap.arn
-#   subdirectory                = "/data"
-#   ec2_config {
-#     security_group_arns = ["arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}:security-group/${module.efs_sg.id}"]
-#     subnet_arn          = "arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}:subnet/${module.vpc.public_subnets[0]}"
-#   }
-#   in_transit_encryption = "TLS1_2"
-#   depends_on            = [aws_efs_mount_target.efs_mt]
-# }
-
 # CloudWatch Log Group
 module "datasync_logs" {
   source            = "./modules/cloudwatch/cloudwatch-log-group"
   log_group_name    = "/aws/datasync/s3-to-efs-sync"
   retention_in_days = 7
 }
-
-# DataSync task - DO NOT create automatically, trigger manually after EC2 populates EFS
-# resource "aws_datasync_task" "s3_to_efs" {
-#   name                     = "efs-to-s3-sync"
-#   source_location_arn      = aws_datasync_location_efs.efs_location.arn
-#   destination_location_arn = aws_datasync_location_s3.s3_location.arn
-#   options {
-#     verify_mode            = "ONLY_FILES_TRANSFERRED"
-#     preserve_deleted_files = "REMOVE"
-#     preserve_devices       = "NONE"
-#     posix_permissions      = "PRESERVE"
-#     uid                    = "NONE"
-#     gid                    = "NONE"
-#     atime                  = "BEST_EFFORT"
-#     mtime                  = "PRESERVE"
-#     transfer_mode          = "CHANGED"
-#     overwrite_mode         = "ALWAYS"
-#     task_queueing          = "ENABLED"
-#     log_level              = "TRANSFER"
-#   }
-#   cloudwatch_log_group_arn = module.datasync_logs.arn
-#   depends_on = [
-#     aws_datasync_location_s3.s3_location,
-#     aws_datasync_location_efs.efs_location,
-#     module.efs_mount_instance
-#   ]
-# }
 
 module "datasync" {
   source = "./modules/datasync"
@@ -460,7 +370,7 @@ module "datasync" {
   efs_file_system_arn   = module.efs.arn
   efs_access_role_arn   = module.efs_access_role.arn
   efs_access_point_arn  = module.efs.access_point_arn
-  efs_subdirectory      = "/data"
+  efs_subdirectory      = "/"
   security_group_arns   = ["arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}:security-group/${module.efs_sg.id}"]
   subnet_arn            = "arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}:subnet/${module.vpc.public_subnets[0]}"
   in_transit_encryption = "TLS1_2"
@@ -489,6 +399,7 @@ module "datasync" {
   }
 
   depends_on = [
+    module.efs,
     module.efs_mount_instance
   ]
 }

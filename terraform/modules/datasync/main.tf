@@ -52,4 +52,6 @@ resource "aws_datasync_task" "this" {
   cloudwatch_log_group_arn = var.cloudwatch_log_group_arn
   
   tags = var.tags
+
+  depends_on = [ aws_datasync_location_efs.this, aws_datasync_location_s3.this ]
 }
