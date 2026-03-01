@@ -80,8 +80,8 @@ module "efs" {
 
   create_access_point = true
   access_point_posix_user = {
-    gid = 1000
-    uid = 1000
+    gid = 0
+    uid = 0
   }
   access_point_root_directory = {
     path        = "/"
@@ -355,6 +355,17 @@ module "datasync_logs" {
   retention_in_days = 7
 }
 
+resource "null_resource" "wait_for_efs_setup" {
+  depends_on = [module.efs_mount_instance]
+
+  provisioner "local-exec" {
+    command = <<EOT
+      echo "Waiting for EFS setup to complete..."
+      sleep 300
+    EOT
+  }
+}
+
 module "datasync" {
   source = "./modules/datasync"
 
@@ -377,15 +388,15 @@ module "datasync" {
 
   # Task Options
   task_options = {
-    verify_mode            = "ONLY_FILES_TRANSFERRED"
-    preserve_deleted_files = "REMOVE"
+    verify_mode            = "POINT_IN_TIME_CONSISTENT"
+    preserve_deleted_files = "PRESERVE"
     preserve_devices       = "NONE"
     posix_permissions      = "PRESERVE"
     uid                    = "NONE"
     gid                    = "NONE"
     atime                  = "BEST_EFFORT"
     mtime                  = "PRESERVE"
-    transfer_mode          = "CHANGED"
+    transfer_mode          = "ALL" # <-- changed from "CHANGED"
     overwrite_mode         = "ALWAYS"
     task_queueing          = "ENABLED"
     log_level              = "TRANSFER"
