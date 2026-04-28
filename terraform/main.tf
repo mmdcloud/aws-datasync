@@ -21,9 +21,9 @@ module "vpc" {
   enable_dns_support      = true
   create_igw              = true
   map_public_ip_on_launch = true
-  enable_nat_gateway      = false
+  enable_nat_gateway      = true
   single_nat_gateway      = false
-  one_nat_gateway_per_az  = false
+  one_nat_gateway_per_az  = true
   tags = {
     Environment = "prod"
     Project     = "efs-to-s3-datasync"
@@ -43,7 +43,7 @@ module "efs_sg" {
       protocol        = "tcp"
       security_groups = []
       cidr_blocks     = ["10.0.0.0/16"]
-      self            = true
+      self            = false
     },
     {
       description     = "SSH access"
@@ -78,17 +78,17 @@ module "efs" {
   subnet_ids         = module.vpc.public_subnets
   security_group_ids = [module.efs_sg.id]
 
-  create_access_point = true
-  access_point_posix_user = {
-    gid = 0
-    uid = 0
-  }
-  access_point_root_directory = {
-    path        = "/"
-    owner_gid   = 1000
-    owner_uid   = 1000
-    permissions = "755"
-  }
+  # create_access_point = true
+  # access_point_posix_user = {
+  #   gid = 0
+  #   uid = 0
+  # }
+  # access_point_root_directory = {
+  #   path        = "/mnt/efs"
+  #   owner_gid   = 1000
+  #   owner_uid   = 1000
+  #   permissions = "777"
+  # }
 
   tags = {
     Environment = "prod"
@@ -100,7 +100,7 @@ module "efs" {
 # -----------------------------------------------------------------------------------------
 data "aws_ami" "ubuntu" {
   most_recent = true
-  owners      = ["amazon"]
+  owners      = ["099720109477"]
   filter {
     name   = "name"
     values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-*"]
@@ -268,18 +268,12 @@ module "s3_access_role" {
   policy             = <<EOF
     {
         "Version": "2012-10-17",
-        "Statement": [
+        "Statement": [            
             {
               "Action" : [
                 "s3:GetBucketLocation",
                 "s3:ListBucket",
-                "s3:ListBucketMultipartUploads"
-              ],
-              "Effect" : "Allow",
-              "Resource" : "${module.destination_bucket.arn}"
-            },
-            {
-              "Action" : [
+                "s3:ListBucketMultipartUploads",
                 "s3:AbortMultipartUpload",
                 "s3:DeleteObject",
                 "s3:GetObject",
@@ -289,7 +283,10 @@ module "s3_access_role" {
                 "s3:PutObject"
               ],
               "Effect" : "Allow",
-              "Resource" : "${module.destination_bucket.arn}/*"
+              "Resource" : [
+              "arn:aws:s3:::destination-bucket-${random_id.id.hex}",
+              "arn:aws:s3:::destination-bucket-${random_id.id.hex}/*"
+              ]
             }
         ]
     }
@@ -322,14 +319,21 @@ module "efs_access_role" {
         "Version": "2012-10-17",
         "Statement": [            
             {
-              "Action" : [
-                "elasticfilesystem:ClientMount",
-                "elasticfilesystem:ClientWrite",
-                "elasticfilesystem:ClientRootAccess",
-                "elasticfilesystem:DescribeMountTargets"
+              "Action": [
+                "elasticfilesystem:ClientMount", 
+                "elasticfilesystem:ClientWrite", 
+                "elasticfilesystem:ClientRootAccess"
               ],
-              "Effect"   : "Allow",
-              "Resource" : "${module.efs.arn}"
+              "Effect": "Allow",
+              "Resource": "${module.efs.arn}"
+            },
+            {
+              "Action": [
+                "elasticfilesystem:DescribeMountTargets", 
+                "elasticfilesystem:DescribeFileSystems"
+              ],  
+              "Effect": "Allow",
+              "Resource": "*"   
             },
             {
               "Action" : [
@@ -338,7 +342,8 @@ module "efs_access_role" {
                 "ec2:CreateNetworkInterface",
                 "ec2:DeleteNetworkInterface",
                 "ec2:DescribeSecurityGroups",
-                "ec2:DescribeNetworkInterfaceAttribute"
+                "ec2:DescribeNetworkInterfaceAttribute",
+                "ec2:CreateNetworkInterfacePermission" 
               ],
               "Effect"   : "Allow",
               "Resource" : "*"
@@ -351,19 +356,40 @@ module "efs_access_role" {
 # CloudWatch Log Group
 module "datasync_logs" {
   source            = "./modules/cloudwatch/cloudwatch-log-group"
-  log_group_name    = "/aws/datasync/s3-to-efs-sync"
+  log_group_name    = "/aws/datasync/efs-to-s3-sync"
   retention_in_days = 7
 }
 
-resource "null_resource" "wait_for_efs_setup" {
-  depends_on = [module.efs_mount_instance]
+# resource "null_resource" "wait_for_efs_setup" {
+#   depends_on = [module.efs_mount_instance]
 
-  provisioner "local-exec" {
-    command = <<EOT
-      echo "Waiting for EFS setup to complete..."
-      sleep 300
-    EOT
-  }
+#   provisioner "remote-exec" {
+#     inline = [
+#       "while [ ! -f /mnt/efs/.setup-complete ]; do echo 'Waiting for EFS setup...'; sleep 10; done",
+#       "echo 'EFS setup complete!'"
+#     ]
+
+#     connection {
+#       type        = "ssh"
+#       user        = "ubuntu"
+#       private_key = file("/home/shiv/Downloads/madmaxkeypair.pem")
+#       host        = module.efs_mount_instance.public_ip
+#     }
+#   }
+# }
+
+resource "aws_cloudwatch_log_resource_policy" "datasync_logs_policy" {
+  policy_name = "datasync-log-policy"
+  policy_document = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DataSyncLogsToCloudWatch"
+      Effect    = "Allow"
+      Principal = { Service = "datasync.amazonaws.com" }
+      Action    = ["logs:CreateLogStream", "logs:PutLogEvents"]
+      Resource  = "${module.datasync_logs.arn}:*"
+    }]
+  })
 }
 
 module "datasync" {
@@ -378,31 +404,31 @@ module "datasync" {
   s3_bucket_access_role_arn = module.s3_access_role.arn
 
   # EFS Location
-  efs_file_system_arn   = module.efs.arn
-  efs_access_role_arn   = module.efs_access_role.arn
-  efs_access_point_arn  = module.efs.access_point_arn
-  efs_subdirectory      = "/"
-  security_group_arns   = ["arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}:security-group/${module.efs_sg.id}"]
-  subnet_arn            = "arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}:subnet/${module.vpc.public_subnets[0]}"
-  in_transit_encryption = "TLS1_2"
+  efs_file_system_arn = module.efs.arn
+  efs_access_role_arn = module.efs_access_role.arn
+  # efs_access_point_arn  = module.efs.access_point_arn
+  efs_subdirectory    = "/"
+  security_group_arns = [module.efs_sg.arn]
+  subnet_arn          = module.vpc.private_subnet_arns[0]
+  # in_transit_encryption = "TLS1_2"
 
   # Task Options
   task_options = {
-    verify_mode            = "POINT_IN_TIME_CONSISTENT"
+    verify_mode            = "ONLY_FILES_TRANSFERRED"
     preserve_deleted_files = "PRESERVE"
     preserve_devices       = "NONE"
-    posix_permissions      = "PRESERVE"
     uid                    = "NONE"
     gid                    = "NONE"
+    posix_permissions      = "NONE"
     atime                  = "BEST_EFFORT"
     mtime                  = "PRESERVE"
-    transfer_mode          = "ALL" # <-- changed from "CHANGED"
+    transfer_mode          = "ALL"
     overwrite_mode         = "ALWAYS"
     task_queueing          = "ENABLED"
     log_level              = "TRANSFER"
   }
 
-  cloudwatch_log_group_arn = module.datasync_logs.arn
+  cloudwatch_log_group_arn = "${module.datasync_logs.arn}:*"
 
   tags = {
     Environment = "prod"
@@ -412,5 +438,6 @@ module "datasync" {
   depends_on = [
     module.efs,
     module.efs_mount_instance
+    # null_resource.wait_for_efs_setup
   ]
 }

@@ -15,7 +15,7 @@ resource "aws_datasync_location_s3" "this" {
 resource "aws_datasync_location_efs" "this" {
   efs_file_system_arn         = var.efs_file_system_arn
   file_system_access_role_arn = var.efs_access_role_arn
-  access_point_arn            = var.efs_access_point_arn
+  # access_point_arn            = var.efs_access_point_arn
   subdirectory                = var.efs_subdirectory
   
   ec2_config {

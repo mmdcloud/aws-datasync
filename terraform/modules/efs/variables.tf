@@ -50,36 +50,36 @@ variable "tags" {
   default     = {}
 }
 
-variable "create_access_point" {
-  description = "Whether to create an EFS access point"
-  type        = bool
-  default     = false
-}
+# variable "create_access_point" {
+#   description = "Whether to create an EFS access point"
+#   type        = bool
+#   default     = false
+# }
 
-variable "access_point_posix_user" {
-  description = "POSIX user configuration for access point"
-  type = object({
-    gid = number
-    uid = number
-  })
-  default = {
-    gid = 1000
-    uid = 1000
-  }
-}
+# variable "access_point_posix_user" {
+#   description = "POSIX user configuration for access point"
+#   type = object({
+#     gid = number
+#     uid = number
+#   })
+#   default = {
+#     gid = 1000
+#     uid = 1000
+#   }
+# }
 
-variable "access_point_root_directory" {
-  description = "Root directory configuration for access point"
-  type = object({
-    path        = string
-    owner_gid   = number
-    owner_uid   = number
-    permissions = string
-  })
-  default = {
-    path        = "/data"
-    owner_gid   = 1000
-    owner_uid   = 1000
-    permissions = "755"
-  }
-}
+# variable "access_point_root_directory" {
+#   description = "Root directory configuration for access point"
+#   type = object({
+#     path        = string
+#     owner_gid   = number
+#     owner_uid   = number
+#     permissions = string
+#   })
+#   default = {
+#     path        = "/data"
+#     owner_gid   = 1000
+#     owner_uid   = 1000
+#     permissions = "755"
+#   }
+# }
