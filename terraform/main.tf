@@ -21,9 +21,9 @@ module "vpc" {
   enable_dns_support      = true
   create_igw              = true
   map_public_ip_on_launch = true
-  enable_nat_gateway      = true
+  enable_nat_gateway      = false
   single_nat_gateway      = false
-  one_nat_gateway_per_az  = true
+  one_nat_gateway_per_az  = false
   tags = {
     Environment = "prod"
     Project     = "efs-to-s3-datasync"
@@ -75,7 +75,7 @@ module "efs" {
   encrypted          = true
   performance_mode   = "generalPurpose"
   throughput_mode    = "bursting"
-  subnet_ids         = module.vpc.public_subnets
+  subnet_ids         = [module.vpc.public_subnets[0]]
   security_group_ids = [module.efs_sg.id]
 
   # create_access_point = true
@@ -162,6 +162,11 @@ module "instance_profile_role" {
         ]
     }
     EOF
+}
+
+resource "aws_iam_role_policy_attachment" "ssm_core" {
+  role       = module.instance_profile_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
 resource "aws_iam_instance_profile" "iam_instance_profile" {
@@ -409,7 +414,7 @@ module "datasync" {
   # efs_access_point_arn  = module.efs.access_point_arn
   efs_subdirectory    = "/"
   security_group_arns = [module.efs_sg.arn]
-  subnet_arn          = module.vpc.private_subnet_arns[0]
+  subnet_arn          = module.vpc.public_subnet_arns[0]
   # in_transit_encryption = "TLS1_2"
 
   # Task Options

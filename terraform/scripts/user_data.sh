@@ -1,30 +1,29 @@
 #!/bin/bash
-sudo apt-get update -y
-sudo mkdir -p /mnt/efs
-sudo apt-get install -y amazon-efs-utils
+set -e
 
-# Wait long enough for EFS mount target to be available
-sleep 90
+apt-get update -y
+apt-get install -y nfs-common
 
-sudo mount -t efs ${efs_id}:/ /mnt/efs
+mkdir -p /mnt/efs
 
-# ✅ CRITICAL: Verify mount actually succeeded before writing anything
+# Mount using NFS directly — no efs-utils needed
+mount -t nfs4 \
+  -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport \
+  ${efs_id}.efs.us-east-1.amazonaws.com:/ \
+  /mnt/efs
+
+# Verify mount succeeded
 if ! mountpoint -q /mnt/efs; then
   echo "ERROR: EFS mount failed. Aborting." >&2
   exit 1
 fi
 
-sudo chown ubuntu:ubuntu /mnt/efs
-sudo chmod 777 /mnt/efs
+chown ubuntu:ubuntu /mnt/efs
+chmod 777 /mnt/efs
 
 for i in {1..10}; do
-  base64 /dev/urandom | head -c 200 | sudo tee /mnt/efs/file_$i.txt > /dev/null
+  base64 /dev/urandom | head -c 200 | tee /mnt/efs/file_$i.txt > /dev/null
 done
 
-sudo chown -R ubuntu:ubuntu /mnt/efs
-sudo chmod -R 777 /mnt/efs/*.txt
-
-# Only signal completion AFTER verified write to EFS
-sudo touch /mnt/efs/.setup-complete
-
-echo "${efs_id}:/ /mnt/efs efs _netdev,tls 0 0" | sudo tee -a /etc/fstab
+chown -R ubuntu:ubuntu /mnt/efs
+chmod -R 777 /mnt/efs/*.txt
