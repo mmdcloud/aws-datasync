@@ -21,8 +21,8 @@ module "vpc" {
   enable_dns_support      = true
   create_igw              = true
   map_public_ip_on_launch = true
-  enable_nat_gateway      = false
-  single_nat_gateway      = false
+  enable_nat_gateway      = true
+  single_nat_gateway      = true
   one_nat_gateway_per_az  = false
   tags = {
     Environment = "prod"
@@ -183,6 +183,7 @@ module "efs_mount_instance" {
   associate_public_ip_address = true
   user_data = templatefile("${path.module}/scripts/user_data.sh", {
     efs_id = module.efs.id
+    region = var.region
   })
   instance_profile = aws_iam_instance_profile.iam_instance_profile.name
   subnet_id        = module.vpc.public_subnets[0]
@@ -365,23 +366,26 @@ module "datasync_logs" {
   retention_in_days = 7
 }
 
-# resource "null_resource" "wait_for_efs_setup" {
-#   depends_on = [module.efs_mount_instance]
+resource "null_resource" "wait_for_efs_setup" {
+  depends_on = [module.efs_mount_instance]
 
-#   provisioner "remote-exec" {
-#     inline = [
-#       "while [ ! -f /mnt/efs/.setup-complete ]; do echo 'Waiting for EFS setup...'; sleep 10; done",
-#       "echo 'EFS setup complete!'"
-#     ]
+  provisioner "remote-exec" {
+    inline = [
+      "echo 'Waiting for cloud-init to finish...'",
+      "cloud-init status --wait",
+      "echo 'Verifying EFS files exist...'",
+      "until [ -f /mnt/efs/.setup-complete ]; do echo 'waiting...'; sleep 10; done",
+      "echo 'EFS setup confirmed complete!'"
+    ]
 
-#     connection {
-#       type        = "ssh"
-#       user        = "ubuntu"
-#       private_key = file("/home/shiv/Downloads/madmaxkeypair.pem")
-#       host        = module.efs_mount_instance.public_ip
-#     }
-#   }
-# }
+    connection {
+      type        = "ssh"
+      user        = "ubuntu"
+      private_key = file("/home/shiv/Downloads/madmaxkeypair.pem")
+      host        = module.efs_mount_instance.public_ip
+    }
+  }
+}
 
 resource "aws_cloudwatch_log_resource_policy" "datasync_logs_policy" {
   policy_name = "datasync-log-policy"
@@ -442,7 +446,7 @@ module "datasync" {
 
   depends_on = [
     module.efs,
-    module.efs_mount_instance
-    # null_resource.wait_for_efs_setup
+    module.efs_mount_instance,
+    null_resource.wait_for_efs_setup
   ]
 }

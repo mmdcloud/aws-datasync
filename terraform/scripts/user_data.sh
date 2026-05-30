@@ -9,7 +9,7 @@ mkdir -p /mnt/efs
 # Mount using NFS directly — no efs-utils needed
 mount -t nfs4 \
   -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport \
-  ${efs_id}.efs.us-east-1.amazonaws.com:/ \
+  ${efs_id}.efs.${region}.amazonaws.com:/ \
   /mnt/efs
 
 # Verify mount succeeded
@@ -27,3 +27,6 @@ done
 
 chown -R ubuntu:ubuntu /mnt/efs
 chmod -R 777 /mnt/efs/*.txt
+
+touch /mnt/efs/.setup-complete
+echo "Setup complete at $(date)" >> /var/log/efs-setup.log
