@@ -178,7 +178,7 @@ module "efs_mount_instance" {
   source                      = "./modules/ec2"
   name                        = "efs-mount-instance"
   ami_id                      = data.aws_ami.ubuntu.id
-  instance_type               = "t2.micro"
+  instance_type               = "t3.micro"
   key_name                    = "madmaxkeypair"
   associate_public_ip_address = true
   user_data = templatefile("${path.module}/scripts/user_data.sh", {
@@ -371,10 +371,11 @@ resource "null_resource" "wait_for_efs_setup" {
 
   provisioner "remote-exec" {
     inline = [
-      "echo 'Waiting for cloud-init to finish...'",
-      "cloud-init status --wait",
-      "echo 'Verifying EFS files exist...'",
-      "until [ -f /mnt/efs/.setup-complete ]; do echo 'waiting...'; sleep 10; done",
+      "echo 'Waiting for EFS mount...'",
+      # Wait max 10 minutes, check every 5 seconds
+      "timeout 600 bash -c 'until mountpoint -q /mnt/efs; do sleep 5; done'",
+      "echo 'EFS mounted. Waiting for setup complete marker...'",
+      "timeout 300 bash -c 'until [ -f /mnt/efs/.setup-complete ]; do sleep 5; done'",
       "echo 'EFS setup confirmed complete!'"
     ]
 
