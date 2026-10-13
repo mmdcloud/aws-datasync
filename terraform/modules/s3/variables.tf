@@ -1,6 +1,6 @@
 variable "bucket_name" {
   description = "The name of the S3 bucket to create."
-  type        = string  
+  type        = string
 }
 variable "force_destroy" {}
 variable "versioning_enabled" {}

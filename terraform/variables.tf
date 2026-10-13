@@ -13,3 +13,9 @@ variable "private_subnets" {
 variable "azs" {
   type = list(string)
 }
+
+variable "private_key_path" {
+  description = "Path to SSH private key for EC2 verification (leave empty to skip SSH check)"
+  type        = string
+  default     = ""
+}

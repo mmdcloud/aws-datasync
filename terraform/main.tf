@@ -24,6 +24,7 @@ module "vpc" {
   enable_nat_gateway      = true
   single_nat_gateway      = true
   one_nat_gateway_per_az  = false
+  enable_s3_endpoint      = true
   tags = {
     Environment = "prod"
     Project     = "efs-to-s3-datasync"
@@ -43,7 +44,7 @@ module "efs_sg" {
       protocol        = "tcp"
       security_groups = []
       cidr_blocks     = ["10.0.0.0/16"]
-      self            = false
+      self            = true
     },
     {
       description     = "SSH access"
@@ -75,7 +76,7 @@ module "efs" {
   encrypted          = true
   performance_mode   = "generalPurpose"
   throughput_mode    = "bursting"
-  subnet_ids         = [module.vpc.public_subnets[0]]
+  subnet_ids         = module.vpc.private_subnets
   security_group_ids = [module.efs_sg.id]
 
   # create_access_point = true
@@ -179,7 +180,7 @@ module "efs_mount_instance" {
   name                        = "efs-mount-instance"
   ami_id                      = data.aws_ami.ubuntu.id
   instance_type               = "t3.micro"
-  key_name                    = "madmaxkeypair"
+  key_name                    = "mohitd"
   associate_public_ip_address = true
   user_data = templatefile("${path.module}/scripts/user_data.sh", {
     efs_id = module.efs.id
@@ -188,6 +189,8 @@ module "efs_mount_instance" {
   instance_profile = aws_iam_instance_profile.iam_instance_profile.name
   subnet_id        = module.vpc.public_subnets[0]
   security_groups  = [module.efs_sg.id]
+
+  depends_on = [module.efs]
 }
 
 # -----------------------------------------------------------------------------------------
@@ -216,7 +219,7 @@ module "destination_bucket" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "DataSyncAccess"
+        Sid    = "DataSyncBucketAccess"
         Effect = "Allow"
         Principal = {
           AWS = module.s3_access_role.arn
@@ -224,19 +227,28 @@ module "destination_bucket" {
         Action = [
           "s3:GetBucketLocation",
           "s3:ListBucket",
-          "s3:ListBucketMultipartUploads",
+          "s3:ListBucketMultipartUploads"
+        ]
+        Resource = "arn:aws:s3:::destination-bucket-${random_id.id.hex}"
+      },
+      {
+        Sid    = "DataSyncObjectAccess"
+        Effect = "Allow"
+        Principal = {
+          AWS = module.s3_access_role.arn
+        }
+        Action = [
           "s3:AbortMultipartUpload",
           "s3:DeleteObject",
           "s3:GetObject",
+          "s3:GetObjectTagging",
+          "s3:GetObjectVersion",
+          "s3:GetObjectVersionTagging",
           "s3:ListMultipartUploadParts",
           "s3:PutObject",
-          "s3:PutObjectTagging",
-          "s3:GetObjectTagging"
+          "s3:PutObjectTagging"
         ]
-        Resource = [
-          "arn:aws:s3:::destination-bucket-${random_id.id.hex}",
-          "arn:aws:s3:::destination-bucket-${random_id.id.hex}/*"
-        ]
+        Resource = "arn:aws:s3:::destination-bucket-${random_id.id.hex}/*"
       }
     ]
   })
@@ -256,47 +268,48 @@ module "s3_access_role" {
   role_description   = "datasync-s3-access-role"
   policy_name        = "datasync-s3-access-policy"
   policy_description = "datasync-s3-access-policy"
-  assume_role_policy = <<EOF
-    {
-        "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Action": "sts:AssumeRole",
-                "Principal": {
-                  "Service": "datasync.amazonaws.com"
-                },
-                "Effect": "Allow",
-                "Sid": ""
-            }
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Principal = {
+          Service = "datasync.amazonaws.com"
+        }
+        Effect = "Allow"
+        Sid    = ""
+      }
+    ]
+  })
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = [
+          "s3:GetBucketLocation",
+          "s3:ListBucket",
+          "s3:ListBucketMultipartUploads"
         ]
-    }
-    EOF
-  policy             = <<EOF
-    {
-        "Version": "2012-10-17",
-        "Statement": [            
-            {
-              "Action" : [
-                "s3:GetBucketLocation",
-                "s3:ListBucket",
-                "s3:ListBucketMultipartUploads",
-                "s3:AbortMultipartUpload",
-                "s3:DeleteObject",
-                "s3:GetObject",
-                "s3:ListMultipartUploadParts",
-                "s3:PutObjectTagging",
-                "s3:GetObjectTagging",
-                "s3:PutObject"
-              ],
-              "Effect" : "Allow",
-              "Resource" : [
-              "arn:aws:s3:::destination-bucket-${random_id.id.hex}",
-              "arn:aws:s3:::destination-bucket-${random_id.id.hex}/*"
-              ]
-            }
+        Effect   = "Allow"
+        Resource = "arn:aws:s3:::destination-bucket-${random_id.id.hex}"
+      },
+      {
+        Action = [
+          "s3:AbortMultipartUpload",
+          "s3:DeleteObject",
+          "s3:GetObject",
+          "s3:GetObjectTagging",
+          "s3:GetObjectVersion",
+          "s3:GetObjectVersionTagging",
+          "s3:ListMultipartUploadParts",
+          "s3:PutObject",
+          "s3:PutObjectTagging"
         ]
-    }
-    EOF
+        Effect   = "Allow"
+        Resource = "arn:aws:s3:::destination-bucket-${random_id.id.hex}/*"
+      }
+    ]
+  })
 }
 
 module "efs_access_role" {
@@ -367,6 +380,7 @@ module "datasync_logs" {
 }
 
 resource "null_resource" "wait_for_efs_setup" {
+  count      = var.private_key_path != "" ? (fileexists(var.private_key_path) ? 1 : 0) : 0
   depends_on = [module.efs_mount_instance]
 
   provisioner "remote-exec" {
@@ -382,7 +396,7 @@ resource "null_resource" "wait_for_efs_setup" {
     connection {
       type        = "ssh"
       user        = "ubuntu"
-      private_key = file("/home/shiv/Downloads/madmaxkeypair.pem")
+      private_key = fileexists(var.private_key_path) ? file(var.private_key_path) : ""
       host        = module.efs_mount_instance.public_ip
     }
   }
@@ -417,10 +431,10 @@ module "datasync" {
   efs_file_system_arn = module.efs.arn
   efs_access_role_arn = module.efs_access_role.arn
   # efs_access_point_arn  = module.efs.access_point_arn
-  efs_subdirectory    = "/"
-  security_group_arns = [module.efs_sg.arn]
-  subnet_arn          = module.vpc.public_subnet_arns[0]
-  # in_transit_encryption = "TLS1_2"
+  efs_subdirectory      = "/"
+  security_group_arns   = [module.efs_sg.arn]
+  subnet_arn            = module.vpc.private_subnet_arns[0]
+  in_transit_encryption = "TLS1_2"
 
   # Task Options
   task_options = {

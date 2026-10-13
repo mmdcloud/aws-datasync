@@ -11,13 +11,13 @@ variable "vpc_id" {
 variable "ingress_rules" {
   description = "List of ingress rules"
   type = list(object({
-    description = string
-    from_port   = number
-    to_port     = number
-    protocol    = string
+    description     = string
+    from_port       = number
+    to_port         = number
+    protocol        = string
     security_groups = list(string)
-    cidr_blocks = list(string)
-    self    = optional(bool)
+    cidr_blocks     = list(string)
+    self            = optional(bool)
   }))
   default = []
 }

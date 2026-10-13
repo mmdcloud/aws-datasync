@@ -125,3 +125,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "schedule_expression" {
+  description = "Schedule expression for DataSync task (e.g., cron or rate)"
+  type        = string
+  default     = null
+}

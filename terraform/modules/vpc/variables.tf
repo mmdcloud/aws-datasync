@@ -14,3 +14,9 @@ variable "tags" {
   type    = map(string)
   default = {}
 }
+
+variable "enable_s3_endpoint" {
+  description = "Enable S3 VPC Gateway Endpoint"
+  type        = bool
+  default     = true
+}

@@ -3,7 +3,7 @@ resource "aws_efs_file_system" "this" {
   encrypted        = var.encrypted
   performance_mode = var.performance_mode
   throughput_mode  = var.throughput_mode
-  
+
   tags = merge(
     {
       Name = var.name
