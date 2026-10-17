@@ -1,4 +1,5 @@
 data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
 
 # -----------------------------------------------------------------------------------------
 # Random suffix for bucket name
@@ -32,17 +33,43 @@ module "vpc" {
 }
 
 # Security Group
+module "datasync_sg" {
+  source        = "./modules/security-groups"
+  name          = "datasync-sg"
+  vpc_id        = module.vpc.vpc_id
+  ingress_rules = []
+  egress_rules = [
+    {
+      description = "Allow NFS egress to EFS"
+      from_port   = 2049
+      to_port     = 2049
+      protocol    = "tcp"
+      cidr_blocks = ["10.0.0.0/16"]
+    },
+    {
+      description = "Allow HTTPS egress for AWS APIs"
+      from_port   = 443
+      to_port     = 443
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
+  tags = {
+    Name = "datasync-sg"
+  }
+}
+
 module "efs_sg" {
   source = "./modules/security-groups"
   name   = "efs-sg"
   vpc_id = module.vpc.vpc_id
   ingress_rules = [
     {
-      description     = "NFS access"
+      description     = "NFS access from VPC"
       from_port       = 2049
       to_port         = 2049
       protocol        = "tcp"
-      security_groups = []
+      security_groups = [module.datasync_sg.id]
       cidr_blocks     = ["10.0.0.0/16"]
       self            = true
     },
@@ -187,197 +214,12 @@ module "efs_mount_instance" {
     region = var.region
   })
   instance_profile = aws_iam_instance_profile.iam_instance_profile.name
-  subnet_id        = module.vpc.public_subnets[0]
+  subnet_id        = module.vpc.private_subnets[0]
   security_groups  = [module.efs_sg.id]
 
   depends_on = [module.efs]
 }
 
-# -----------------------------------------------------------------------------------------
-# S3 Configuration
-# -----------------------------------------------------------------------------------------
-module "destination_bucket" {
-  source             = "./modules/s3"
-  bucket_name        = "destination-bucket-${random_id.id.hex}"
-  objects            = []
-  versioning_enabled = "Enabled"
-  cors = [
-    {
-      allowed_headers = ["*"]
-      allowed_methods = ["PUT"]
-      allowed_origins = ["*"]
-      max_age_seconds = 3000
-    },
-    {
-      allowed_headers = ["*"]
-      allowed_methods = ["GET"]
-      allowed_origins = ["*"]
-      max_age_seconds = 3000
-    }
-  ]
-  bucket_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "DataSyncBucketAccess"
-        Effect = "Allow"
-        Principal = {
-          AWS = module.s3_access_role.arn
-        }
-        Action = [
-          "s3:GetBucketLocation",
-          "s3:ListBucket",
-          "s3:ListBucketMultipartUploads"
-        ]
-        Resource = "arn:aws:s3:::destination-bucket-${random_id.id.hex}"
-      },
-      {
-        Sid    = "DataSyncObjectAccess"
-        Effect = "Allow"
-        Principal = {
-          AWS = module.s3_access_role.arn
-        }
-        Action = [
-          "s3:AbortMultipartUpload",
-          "s3:DeleteObject",
-          "s3:GetObject",
-          "s3:GetObjectTagging",
-          "s3:GetObjectVersion",
-          "s3:GetObjectVersionTagging",
-          "s3:ListMultipartUploadParts",
-          "s3:PutObject",
-          "s3:PutObjectTagging"
-        ]
-        Resource = "arn:aws:s3:::destination-bucket-${random_id.id.hex}/*"
-      }
-    ]
-  })
-  force_destroy = true
-  bucket_notification = {
-    queue           = []
-    lambda_function = []
-  }
-}
-
-# -----------------------------------------------------------------------------------------
-# DataSync Configuration
-# -----------------------------------------------------------------------------------------
-module "s3_access_role" {
-  source             = "./modules/iam"
-  role_name          = "datasync-s3-access-role"
-  role_description   = "datasync-s3-access-role"
-  policy_name        = "datasync-s3-access-policy"
-  policy_description = "datasync-s3-access-policy"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Principal = {
-          Service = "datasync.amazonaws.com"
-        }
-        Effect = "Allow"
-        Sid    = ""
-      }
-    ]
-  })
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = [
-          "s3:GetBucketLocation",
-          "s3:ListBucket",
-          "s3:ListBucketMultipartUploads"
-        ]
-        Effect   = "Allow"
-        Resource = "arn:aws:s3:::destination-bucket-${random_id.id.hex}"
-      },
-      {
-        Action = [
-          "s3:AbortMultipartUpload",
-          "s3:DeleteObject",
-          "s3:GetObject",
-          "s3:GetObjectTagging",
-          "s3:GetObjectVersion",
-          "s3:GetObjectVersionTagging",
-          "s3:ListMultipartUploadParts",
-          "s3:PutObject",
-          "s3:PutObjectTagging"
-        ]
-        Effect   = "Allow"
-        Resource = "arn:aws:s3:::destination-bucket-${random_id.id.hex}/*"
-      }
-    ]
-  })
-}
-
-module "efs_access_role" {
-  source             = "./modules/iam"
-  role_name          = "datasync-efs-access-role"
-  role_description   = "datasync-efs-access-role"
-  policy_name        = "datasync-efs-access-policy"
-  policy_description = "datasync-efs-access-policy"
-  assume_role_policy = <<EOF
-    {
-        "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Action": "sts:AssumeRole",
-                "Principal": {
-                  "Service": "datasync.amazonaws.com"
-                },
-                "Effect": "Allow",
-                "Sid": ""
-            }
-        ]
-    }
-    EOF
-  policy             = <<EOF
-    {
-        "Version": "2012-10-17",
-        "Statement": [            
-            {
-              "Action": [
-                "elasticfilesystem:ClientMount", 
-                "elasticfilesystem:ClientWrite", 
-                "elasticfilesystem:ClientRootAccess"
-              ],
-              "Effect": "Allow",
-              "Resource": "${module.efs.arn}"
-            },
-            {
-              "Action": [
-                "elasticfilesystem:DescribeMountTargets", 
-                "elasticfilesystem:DescribeFileSystems"
-              ],  
-              "Effect": "Allow",
-              "Resource": "*"   
-            },
-            {
-              "Action" : [
-                "ec2:DescribeSubnets",
-                "ec2:DescribeNetworkInterfaces",
-                "ec2:CreateNetworkInterface",
-                "ec2:DeleteNetworkInterface",
-                "ec2:DescribeSecurityGroups",
-                "ec2:DescribeNetworkInterfaceAttribute",
-                "ec2:CreateNetworkInterfacePermission" 
-              ],
-              "Effect"   : "Allow",
-              "Resource" : "*"
-            }
-        ]
-    }
-    EOF
-}
-
-# CloudWatch Log Group
-module "datasync_logs" {
-  source            = "./modules/cloudwatch/cloudwatch-log-group"
-  log_group_name    = "/aws/datasync/efs-to-s3-sync"
-  retention_in_days = 7
-}
 
 resource "null_resource" "wait_for_efs_setup" {
   count      = var.private_key_path != "" ? (fileexists(var.private_key_path) ? 1 : 0) : 0
@@ -402,6 +244,181 @@ resource "null_resource" "wait_for_efs_setup" {
   }
 }
 
+# -----------------------------------------------------------------------------------------
+# S3 Configuration
+# -----------------------------------------------------------------------------------------
+locals {
+  bucket_name = "destination-bucket-${random_id.id.hex}"
+}
+
+module "s3_access_role" {
+  source             = "./modules/iam"
+  role_name          = "datasync-s3-access-role"
+  role_description   = "IAM Role for DataSync to write objects into S3"
+  policy_name        = "datasync-s3-access-policy"
+  policy_description = "DataSync S3 access policy"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Principal = { Service = "datasync.amazonaws.com" }
+      Effect    = "Allow"
+    }]
+  })
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid = "DataSyncBucketPermissions"
+        Action = [
+          "s3:GetBucketLocation",
+          "s3:ListBucket",
+          "s3:ListBucketMultipartUploads"
+        ]
+        Effect   = "Allow"
+        Resource = "arn:aws:s3:::${local.bucket_name}"
+      },
+      {
+        Sid = "DataSyncObjectPermissions"
+        Action = [
+          "s3:AbortMultipartUpload",
+          "s3:DeleteObject",
+          "s3:GetObject",
+          "s3:GetObjectTagging",
+          "s3:GetObjectVersion",
+          "s3:GetObjectVersionTagging",
+          "s3:ListMultipartUploadParts",
+          "s3:PutObject",
+          "s3:PutObjectTagging"
+        ]
+        Effect   = "Allow"
+        Resource = "arn:aws:s3:::${local.bucket_name}/*"
+      }
+    ]
+  })
+}
+
+module "destination_bucket" {
+  source             = "./modules/s3"
+  bucket_name        = local.bucket_name
+  objects            = []
+  versioning_enabled = "Enabled"
+  cors               = []
+  bucket_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "DataSyncBucketAccess"
+        Effect = "Allow"
+        Principal = {
+          AWS = module.s3_access_role.arn
+        }
+        Action = [
+          "s3:GetBucketLocation",
+          "s3:ListBucket",
+          "s3:ListBucketMultipartUploads"
+        ]
+        Resource = "arn:aws:s3:::${local.bucket_name}"
+      },
+      {
+        Sid    = "DataSyncObjectAccess"
+        Effect = "Allow"
+        Principal = {
+          AWS = module.s3_access_role.arn
+        }
+        Action = [
+          "s3:AbortMultipartUpload",
+          "s3:DeleteObject",
+          "s3:GetObject",
+          "s3:GetObjectTagging",
+          "s3:GetObjectVersion",
+          "s3:GetObjectVersionTagging",
+          "s3:ListMultipartUploadParts",
+          "s3:PutObject",
+          "s3:PutObjectTagging"
+        ]
+        Resource = "arn:aws:s3:::${local.bucket_name}/*"
+      }
+    ]
+  })
+  force_destroy = true
+  bucket_notification = {
+    queue           = []
+    lambda_function = []
+  }
+}
+
+# -----------------------------------------------------------------------------------------
+# DataSync Configuration
+# -----------------------------------------------------------------------------------------
+# module "efs_access_role" {
+#   source             = "./modules/iam"
+#   role_name          = "datasync-efs-access-role"
+#   role_description   = "datasync-efs-access-role"
+#   policy_name        = "datasync-efs-access-policy"
+#   policy_description = "datasync-efs-access-policy"
+#   assume_role_policy = <<EOF
+#     {
+#         "Version": "2012-10-17",
+#         "Statement": [
+#             {
+#                 "Action": "sts:AssumeRole",
+#                 "Principal": {
+#                   "Service": "datasync.amazonaws.com"
+#                 },
+#                 "Effect": "Allow",
+#                 "Sid": ""
+#             }
+#         ]
+#     }
+#     EOF
+#   policy             = <<EOF
+#     {
+#         "Version": "2012-10-17",
+#         "Statement": [            
+#             {
+#               "Action": [
+#                 "elasticfilesystem:ClientMount", 
+#                 "elasticfilesystem:ClientWrite", 
+#                 "elasticfilesystem:ClientRootAccess"
+#               ],
+#               "Effect": "Allow",
+#               "Resource": "${module.efs.arn}"
+#             },
+#             {
+#               "Action": [
+#                 "elasticfilesystem:DescribeMountTargets", 
+#                 "elasticfilesystem:DescribeFileSystems"
+#               ],  
+#               "Effect": "Allow",
+#               "Resource": "*"   
+#             },
+#             {
+#               "Action" : [
+#                 "ec2:DescribeSubnets",
+#                 "ec2:DescribeNetworkInterfaces",
+#                 "ec2:CreateNetworkInterface",
+#                 "ec2:DeleteNetworkInterface",
+#                 "ec2:DescribeSecurityGroups",
+#                 "ec2:DescribeNetworkInterfaceAttribute",
+#                 "ec2:CreateNetworkInterfacePermission" 
+#               ],
+#               "Effect"   : "Allow",
+#               "Resource" : "*"
+#             }
+#         ]
+#     }
+#     EOF
+# }
+
+
+# CloudWatch Log Group
+module "datasync_logs" {
+  source            = "./modules/cloudwatch/cloudwatch-log-group"
+  log_group_name    = "/aws/datasync/efs-to-s3-sync"
+  retention_in_days = 7
+}
+
 resource "aws_cloudwatch_log_resource_policy" "datasync_logs_policy" {
   policy_name = "datasync-log-policy"
   policy_document = jsonencode({
@@ -410,26 +427,29 @@ resource "aws_cloudwatch_log_resource_policy" "datasync_logs_policy" {
       Sid       = "DataSyncLogsToCloudWatch"
       Effect    = "Allow"
       Principal = { Service = "datasync.amazonaws.com" }
-      Action    = ["logs:CreateLogStream", "logs:PutLogEvents"]
-      Resource  = "${module.datasync_logs.arn}:*"
+      Action = [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ]
+      Resource = "${trimsuffix(module.datasync_logs.arn, ":*")}:*"
     }]
   })
 }
 
 module "datasync" {
-  source = "./modules/datasync"
+  source = "./modules/datasync/efs-to-s3"
 
   task_name = "efs-to-s3-sync"
 
   # S3 Location
   s3_bucket_arn             = module.destination_bucket.arn
   s3_storage_class          = "STANDARD"
-  s3_subdirectory           = "/"
+  s3_subdirectory           = ""
   s3_bucket_access_role_arn = module.s3_access_role.arn
 
   # EFS Location
   efs_file_system_arn = module.efs.arn
-  efs_access_role_arn = module.efs_access_role.arn
+  # efs_access_role_arn = module.efs_access_role.arn
   # efs_access_point_arn  = module.efs.access_point_arn
   efs_subdirectory      = "/"
   security_group_arns   = [module.efs_sg.arn]
