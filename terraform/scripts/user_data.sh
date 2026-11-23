@@ -12,36 +12,50 @@ while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/lib/dpkg/lo
   sleep 3
 done
 
-# Install nfs-common with lock timeout and retry
-if ! dpkg -l nfs-common &>/dev/null; then
-  echo "Installing nfs-common..."
+# Install nfs-common if mount.nfs4 helper binary is not present
+if ! command -v mount.nfs4 >/dev/null 2>&1; then
+  echo "mount.nfs4 helper not found. Installing nfs-common..."
   for i in {1..5}; do
     apt-get update -y && apt-get install -y -o DPkg::Lock::Timeout=120 nfs-common && break
+    echo "apt install retry $i failed, waiting 5s..."
     sleep 5
   done
 fi
 
 mkdir -p /mnt/efs
 
+EFS_IP="${efs_ip}"
 EFS_HOST="${efs_id}.efs.${region}.amazonaws.com"
 
-# Wait for EFS DNS to resolve
-echo "Waiting for DNS resolution of $EFS_HOST..."
-for i in {1..30}; do
-  if getent hosts "$EFS_HOST" >/dev/null 2>&1; then
-    echo "DNS resolved: $(getent hosts "$EFS_HOST")"
+echo "EFS Mount Target IP: $EFS_IP"
+echo "EFS DNS Hostname: $EFS_HOST"
+
+# Mount options for AWS EFS with standard NFSv4.1
+MOUNT_OPTS="nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport"
+
+# Retry mount up to 30 attempts (EFS mount targets take 60-90s to become available in AWS)
+for attempt in {1..30}; do
+  echo "Mount attempt $attempt/30 at $(date)..."
+
+  # Try mounting via direct Mount Target IP first (fastest, immune to DNS delays)
+  if [ -n "$EFS_IP" ]; then
+    echo "Attempting mount via IP: $EFS_IP:/..."
+    if mount -t nfs4 -o "$MOUNT_OPTS" "$EFS_IP:/" /mnt/efs; then
+      echo "Successfully mounted via IP: $EFS_IP:/"
+      MOUNT_SOURCE="$EFS_IP:/"
+      break
+    fi
+  fi
+
+  # Fallback: Try mounting via DNS hostname
+  echo "Attempting mount via DNS: $EFS_HOST:/..."
+  if mount -t nfs4 -o "$MOUNT_OPTS" "$EFS_HOST:/" /mnt/efs; then
+    echo "Successfully mounted via DNS: $EFS_HOST:/"
+    MOUNT_SOURCE="$EFS_HOST:/"
     break
   fi
-  sleep 5
-done
 
-# Retry mount up to 30 attempts (EFS mount targets take 60-90s to become available)
-for attempt in {1..30}; do
-  echo "Mount attempt $attempt..."
-  mount -t nfs4 \
-    -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport \
-    "$EFS_HOST:/" \
-    /mnt/efs && break
+  echo "Mount attempt $attempt failed. Waiting 5s..."
   sleep 5
 done
 
@@ -50,11 +64,11 @@ if ! mountpoint -q /mnt/efs; then
   exit 1
 fi
 
-echo "EFS mounted successfully."
+echo "EFS mounted successfully on /mnt/efs."
 
 # Persist mount in /etc/fstab
-if ! grep -q "$EFS_HOST:/" /etc/fstab; then
-  echo "$EFS_HOST:/ /mnt/efs nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport,_netdev 0 0" >> /etc/fstab
+if ! grep -q "/mnt/efs" /etc/fstab; then
+  echo "$${MOUNT_SOURCE:-$EFS_HOST:/} /mnt/efs nfs4 $MOUNT_OPTS,_netdev 0 0" >> /etc/fstab
 fi
 
 chown ubuntu:ubuntu /mnt/efs
@@ -66,8 +80,12 @@ for i in {1..10}; do
   dd if=/dev/urandom bs=200 count=1 2>/dev/null | base64 > /mnt/efs/file_$i.txt
 done
 
+sync
+
 chown -R ubuntu:ubuntu /mnt/efs
 chmod -R 777 /mnt/efs
+
+sync
 
 touch /mnt/efs/.setup-complete
 echo "Setup complete at $(date). EFS files created:"

@@ -35,7 +35,7 @@ variable "efs_file_system_arn" {
 variable "efs_access_role_arn" {
   description = "ARN of the IAM role for EFS access"
   type        = string
-  default = null
+  default     = null
 }
 
 variable "efs_access_point_arn" {

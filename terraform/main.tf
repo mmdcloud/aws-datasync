@@ -40,17 +40,10 @@ module "datasync_sg" {
   ingress_rules = []
   egress_rules = [
     {
-      description = "Allow NFS egress to EFS"
-      from_port   = 2049
-      to_port     = 2049
-      protocol    = "tcp"
-      cidr_blocks = ["10.0.0.0/16"]
-    },
-    {
-      description = "Allow HTTPS egress for AWS APIs"
-      from_port   = 443
-      to_port     = 443
-      protocol    = "tcp"
+      description = "Allow all outbound traffic for DataSync ENIs"
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
       cidr_blocks = ["0.0.0.0/0"]
     }
   ]
@@ -65,12 +58,30 @@ module "efs_sg" {
   vpc_id = module.vpc.vpc_id
   ingress_rules = [
     {
-      description     = "NFS access from VPC"
+      description     = "NFS access from VPC CIDR"
+      from_port       = 2049
+      to_port         = 2049
+      protocol        = "tcp"
+      security_groups = []
+      cidr_blocks     = ["10.0.0.0/16"]
+      self            = false
+    },
+    {
+      description     = "NFS access from DataSync SG"
       from_port       = 2049
       to_port         = 2049
       protocol        = "tcp"
       security_groups = [module.datasync_sg.id]
-      cidr_blocks     = ["10.0.0.0/16"]
+      cidr_blocks     = []
+      self            = false
+    },
+    {
+      description     = "NFS access within EFS SG"
+      from_port       = 2049
+      to_port         = 2049
+      protocol        = "tcp"
+      security_groups = []
+      cidr_blocks     = []
       self            = true
     },
     {
@@ -80,6 +91,7 @@ module "efs_sg" {
       protocol        = "tcp"
       security_groups = []
       cidr_blocks     = ["0.0.0.0/0"]
+      self            = false
     }
   ]
   egress_rules = [
@@ -212,9 +224,10 @@ module "efs_mount_instance" {
   user_data = templatefile("${path.module}/scripts/user_data.sh", {
     efs_id = module.efs.id
     region = var.region
+    efs_ip = module.efs.mount_target_ips[0]
   })
   instance_profile = aws_iam_instance_profile.iam_instance_profile.name
-  subnet_id        = module.vpc.private_subnets[0]
+  subnet_id        = module.vpc.public_subnets[0]
   security_groups  = [module.efs_sg.id]
 
   depends_on = [module.efs]
@@ -444,15 +457,13 @@ module "datasync" {
   # S3 Location
   s3_bucket_arn             = module.destination_bucket.arn
   s3_storage_class          = "STANDARD"
-  s3_subdirectory           = ""
+  s3_subdirectory           = "/"
   s3_bucket_access_role_arn = module.s3_access_role.arn
 
   # EFS Location
-  efs_file_system_arn = module.efs.arn
-  # efs_access_role_arn = module.efs_access_role.arn
-  # efs_access_point_arn  = module.efs.access_point_arn
+  efs_file_system_arn   = module.efs.arn
   efs_subdirectory      = "/"
-  security_group_arns   = [module.efs_sg.arn]
+  security_group_arns   = [module.datasync_sg.arn]
   subnet_arn            = module.vpc.private_subnet_arns[0]
   in_transit_encryption = "TLS1_2"
 
@@ -485,3 +496,25 @@ module "datasync" {
     null_resource.wait_for_efs_setup
   ]
 }
+
+# Automatically trigger the DataSync transfer execution after apply
+# resource "null_resource" "start_datasync_execution" {
+#   count = var.datasync_auto_start ? 1 : 0
+
+#   depends_on = [
+#     module.datasync,
+#     module.efs_mount_instance,
+#     null_resource.wait_for_efs_setup
+#   ]
+
+#   provisioner "local-exec" {
+#     command = <<-EOT
+#       %{if var.private_key_path == ""~}
+#       echo "Waiting ${var.datasync_wait_seconds}s for EC2 to finish mounting EFS and generating test files..."
+#       sleep ${var.datasync_wait_seconds}
+#       %{endif~}
+#       echo "Triggering DataSync task execution for ${module.datasync.task_arn}..."
+#       aws datasync start-task-execution --task-arn ${module.datasync.task_arn} --region ${var.region} || echo "DataSync task provisioned. You can trigger it manually with: aws datasync start-task-execution --task-arn ${module.datasync.task_arn} --region ${var.region}"
+#     EOT
+#   }
+# }

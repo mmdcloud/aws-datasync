@@ -18,6 +18,11 @@ output "mount_target_ids" {
   value       = aws_efs_mount_target.this[*].id
 }
 
+output "mount_target_ips" {
+  description = "List of mount target IP addresses"
+  value       = aws_efs_mount_target.this[*].ip_address
+}
+
 # output "access_point_id" {
 #   description = "The ID of the EFS access point"
 #   value       = var.create_access_point ? aws_efs_access_point.this[0].id : null
