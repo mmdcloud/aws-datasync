@@ -85,12 +85,12 @@ module "efs_sg" {
       self            = true
     },
     {
-      description     = "SSH access"
+      description     = "SSH access from VPC"
       from_port       = 22
       to_port         = 22
       protocol        = "tcp"
       security_groups = []
-      cidr_blocks     = ["0.0.0.0/0"]
+      cidr_blocks     = ["10.0.0.0/16"]
       self            = false
     }
   ]
@@ -220,14 +220,14 @@ module "efs_mount_instance" {
   ami_id                      = data.aws_ami.ubuntu.id
   instance_type               = "t3.micro"
   key_name                    = "mohitd"
-  associate_public_ip_address = true
+  associate_public_ip_address = false
   user_data = templatefile("${path.module}/scripts/user_data.sh", {
     efs_id = module.efs.id
     region = var.region
     efs_ip = module.efs.mount_target_ips[0]
   })
   instance_profile = aws_iam_instance_profile.iam_instance_profile.name
-  subnet_id        = module.vpc.public_subnets[0]
+  subnet_id        = module.vpc.private_subnets[0]
   security_groups  = [module.efs_sg.id]
 
   depends_on = [module.efs]
@@ -252,7 +252,7 @@ resource "null_resource" "wait_for_efs_setup" {
       type        = "ssh"
       user        = "ubuntu"
       private_key = fileexists(var.private_key_path) ? file(var.private_key_path) : ""
-      host        = module.efs_mount_instance.public_ip
+      host        = module.efs_mount_instance.private_ip
     }
   }
 }
@@ -364,67 +364,6 @@ module "destination_bucket" {
 # -----------------------------------------------------------------------------------------
 # DataSync Configuration
 # -----------------------------------------------------------------------------------------
-# module "efs_access_role" {
-#   source             = "./modules/iam"
-#   role_name          = "datasync-efs-access-role"
-#   role_description   = "datasync-efs-access-role"
-#   policy_name        = "datasync-efs-access-policy"
-#   policy_description = "datasync-efs-access-policy"
-#   assume_role_policy = <<EOF
-#     {
-#         "Version": "2012-10-17",
-#         "Statement": [
-#             {
-#                 "Action": "sts:AssumeRole",
-#                 "Principal": {
-#                   "Service": "datasync.amazonaws.com"
-#                 },
-#                 "Effect": "Allow",
-#                 "Sid": ""
-#             }
-#         ]
-#     }
-#     EOF
-#   policy             = <<EOF
-#     {
-#         "Version": "2012-10-17",
-#         "Statement": [            
-#             {
-#               "Action": [
-#                 "elasticfilesystem:ClientMount", 
-#                 "elasticfilesystem:ClientWrite", 
-#                 "elasticfilesystem:ClientRootAccess"
-#               ],
-#               "Effect": "Allow",
-#               "Resource": "${module.efs.arn}"
-#             },
-#             {
-#               "Action": [
-#                 "elasticfilesystem:DescribeMountTargets", 
-#                 "elasticfilesystem:DescribeFileSystems"
-#               ],  
-#               "Effect": "Allow",
-#               "Resource": "*"   
-#             },
-#             {
-#               "Action" : [
-#                 "ec2:DescribeSubnets",
-#                 "ec2:DescribeNetworkInterfaces",
-#                 "ec2:CreateNetworkInterface",
-#                 "ec2:DeleteNetworkInterface",
-#                 "ec2:DescribeSecurityGroups",
-#                 "ec2:DescribeNetworkInterfaceAttribute",
-#                 "ec2:CreateNetworkInterfacePermission" 
-#               ],
-#               "Effect"   : "Allow",
-#               "Resource" : "*"
-#             }
-#         ]
-#     }
-#     EOF
-# }
-
-
 # CloudWatch Log Group
 module "datasync_logs" {
   source            = "./modules/cloudwatch/cloudwatch-log-group"
@@ -496,25 +435,3 @@ module "datasync" {
     null_resource.wait_for_efs_setup
   ]
 }
-
-# Automatically trigger the DataSync transfer execution after apply
-# resource "null_resource" "start_datasync_execution" {
-#   count = var.datasync_auto_start ? 1 : 0
-
-#   depends_on = [
-#     module.datasync,
-#     module.efs_mount_instance,
-#     null_resource.wait_for_efs_setup
-#   ]
-
-#   provisioner "local-exec" {
-#     command = <<-EOT
-#       %{if var.private_key_path == ""~}
-#       echo "Waiting ${var.datasync_wait_seconds}s for EC2 to finish mounting EFS and generating test files..."
-#       sleep ${var.datasync_wait_seconds}
-#       %{endif~}
-#       echo "Triggering DataSync task execution for ${module.datasync.task_arn}..."
-#       aws datasync start-task-execution --task-arn ${module.datasync.task_arn} --region ${var.region} || echo "DataSync task provisioned. You can trigger it manually with: aws datasync start-task-execution --task-arn ${module.datasync.task_arn} --region ${var.region}"
-#     EOT
-#   }
-# }

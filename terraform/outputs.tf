@@ -11,18 +11,18 @@ output "datasync_task_arn" {
   value       = module.datasync.task_arn
 }
 
-output "ec2_public_ip" {
-  description = "Public IP of the EC2 mount instance"
-  value       = module.efs_mount_instance.public_ip
-}
-
 output "ec2_instance_id" {
   description = "Instance ID of the EC2 mount instance"
   value       = module.efs_mount_instance.id
 }
 
+output "ec2_private_ip" {
+  description = "Private IP of the EC2 mount instance"
+  value       = module.efs_mount_instance.private_ip
+}
+
 output "ssm_connect_command" {
-  description = "Connect to EC2 without SSH keys via AWS SSM"
+  description = "Connect to EC2 without SSH keys via AWS SSM Session Manager"
   value       = "aws ssm start-session --target ${module.efs_mount_instance.id} --region ${var.region}"
 }
 
@@ -37,6 +37,6 @@ output "check_s3_files_command" {
 }
 
 output "check_ec2_efs_command" {
-  description = "Command to verify EFS mount and files on EC2"
-  value       = "ssh -i <your-key.pem> ubuntu@${module.efs_mount_instance.public_ip} 'ls -la /mnt/efs && cat /var/log/efs-setup.log'"
+  description = "Command to verify EFS mount and files on EC2 via AWS SSM"
+  value       = "aws ssm start-session --target ${module.efs_mount_instance.id} --region ${var.region} --document-name AWS-StartInteractiveCommand --parameters command='ls -la /mnt/efs && cat /var/log/efs-setup.log'"
 }
