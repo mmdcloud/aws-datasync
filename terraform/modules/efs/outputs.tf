@@ -23,12 +23,27 @@ output "mount_target_ips" {
   value       = aws_efs_mount_target.this[*].ip_address
 }
 
-# output "access_point_id" {
-#   description = "The ID of the EFS access point"
-#   value       = var.create_access_point ? aws_efs_access_point.this[0].id : null
-# }
+output "backup_policy_id" {
+  description = "The ID of the EFS backup policy"
+  value       = try(aws_efs_backup_policy.this[0].id, null)
+}
 
-# output "access_point_arn" {
-#   description = "The ARN of the EFS access point"
-#   value       = var.create_access_point ? aws_efs_access_point.this[0].arn : null
-# }
+output "file_system_policy_id" {
+  description = "The ID of the EFS file system policy"
+  value       = try(aws_efs_file_system_policy.this[0].id, null)
+}
+
+output "replication_configuration_id" {
+  description = "The ID of the EFS replication configuration"
+  value       = try(aws_efs_replication_configuration.this[0].id, null)
+}
+
+output "access_point_id" {
+  description = "The ID of the EFS access point"
+  value       = try(aws_efs_access_point.this[0].id, null)
+}
+
+output "access_point_arn" {
+  description = "The ARN of the EFS access point"
+  value       = try(aws_efs_access_point.this[0].arn, null)
+}
