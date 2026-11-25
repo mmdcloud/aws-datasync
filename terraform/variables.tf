@@ -31,3 +31,9 @@ variable "datasync_wait_seconds" {
   type        = number
   default     = 180
 }
+
+variable "ami_name" {
+  description = "Name or wildcard pattern of the custom AMI to use for the EC2 mount instance"
+  type        = string
+  default     = "datasync-ami*"
+}

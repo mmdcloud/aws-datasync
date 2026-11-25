@@ -22,8 +22,8 @@ module "vpc" {
   enable_dns_support      = true
   create_igw              = true
   map_public_ip_on_launch = true
-  enable_nat_gateway      = true
-  single_nat_gateway      = true
+  enable_nat_gateway      = false
+  single_nat_gateway      = false
   one_nat_gateway_per_az  = false
   enable_s3_endpoint      = true
   tags = {
@@ -138,17 +138,17 @@ module "efs" {
 # -----------------------------------------------------------------------------------------
 # EC2 Configuration
 # -----------------------------------------------------------------------------------------
-data "aws_ami" "ubuntu" {
+data "aws_ami" "datasync" {
   most_recent = true
-  owners      = ["099720109477"]
+  owners      = ["self"]
   filter {
     name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-*"]
+    values = [var.ami_name]
   }
 
   filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
+    name   = "state"
+    values = ["available"]
   }
 }
 
@@ -217,7 +217,7 @@ resource "aws_iam_instance_profile" "iam_instance_profile" {
 module "efs_mount_instance" {
   source                      = "./modules/ec2"
   name                        = "efs-mount-instance"
-  ami_id                      = data.aws_ami.ubuntu.id
+  ami_id                      = data.aws_ami.datasync.id
   instance_type               = "t3.micro"
   key_name                    = "mohitd"
   associate_public_ip_address = false

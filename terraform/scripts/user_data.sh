@@ -5,20 +5,17 @@ exec > /var/log/efs-setup.log 2>&1
 
 echo "Setup started at $(date)"
 
-# Wait for background apt processes (unattended-upgrades) to release locks
-echo "Waiting for background apt processes to release locks..."
-while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/lib/dpkg/lock >/dev/null 2>&1; do
-  echo "Apt lock held, waiting..."
-  sleep 3
-done
+# Disable background apt update timers to avoid lock contention and timeouts without NAT Gateway
+systemctl stop apt-daily.timer apt-daily-upgrade.timer >/dev/null 2>&1 || true
+systemctl disable apt-daily.timer apt-daily-upgrade.timer >/dev/null 2>&1 || true
 
-# Install nfs-common if mount.nfs4 helper binary is not present
-if ! command -v mount.nfs4 >/dev/null 2>&1; then
-  echo "mount.nfs4 helper not found. Installing nfs-common..."
-  for i in {1..5}; do
-    apt-get update -y && apt-get install -y -o DPkg::Lock::Timeout=120 nfs-common && break
-    echo "apt install retry $i failed, waiting 5s..."
-    sleep 5
+# Verify nfs-common / mount.nfs4 helper binary (pre-installed in custom AMI)
+if command -v mount.nfs4 >/dev/null 2>&1; then
+  echo "mount.nfs4 helper binary verified from AMI."
+else
+  echo "WARNING: mount.nfs4 helper not found. Attempting install fallback..."
+  for i in {1..3}; do
+    apt-get update -y && apt-get install -y -o DPkg::Lock::Timeout=120 nfs-common && break || sleep 5
   done
 fi
 
@@ -37,7 +34,7 @@ MOUNT_OPTS="nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,nor
 for attempt in {1..30}; do
   echo "Mount attempt $attempt/30 at $(date)..."
 
-  # Try mounting via direct Mount Target IP first (fastest, immune to DNS delays)
+  # Try mounting via direct Mount Target IP first (fastest, immune to DNS delays, 100% private)
   if [ -n "$EFS_IP" ]; then
     echo "Attempting mount via IP: $EFS_IP:/..."
     if mount -t nfs4 -o "$MOUNT_OPTS" "$EFS_IP:/" /mnt/efs; then

@@ -45,19 +45,16 @@ Key highlights:
  ┌─────────────────────────────────────────────────────────────────────────────────┐
  │                                                                                 │
  │   Public Subnets (10.0.1.0/24, 10.0.2.0/24, 10.0.3.0/24)                        │
- │   ┌──────────────────────────┐                                                  │
- │   │       NAT Gateway        │◀── (Outbound apt / package updates)              │
- │   └─────────────▲────────────┘                                                  │
- │                 │                                                               │
+ │   (No NAT Gateway needed — Zero external egress / NAT costs)                    │
+ │                                                                                 │
  │   Private Subnets (10.0.4.0/24, 10.0.5.0/24, 10.0.6.0/24)                       │
  │   ┌───────────────────┐        ┌───────────────────┐    ┌────────────────────┐  │
  │   │   EC2 Instance    │  NFS   │    Amazon EFS     │    │   AWS DataSync     │  │
- │   │ (efs-mount-inst)  ├───────▶│ (efs-datasync-fs) │◀───┤ Task & Private ENI │  │
+ │   │  (datasync-ami)   ├───────▶│ (efs-datasync-fs) │◀───┤ Task & Private ENI │  │
  │   │  [No Public IP]   │        │  [Mount Targets]  │    │ (efs-to-s3-sync)   │  │
- │   └─────────▲─────────┘        └───────────────────┘    └─────────┬──────────┘  │
- │             │                                                     │             │
- │    AWS SSM Session Manager                                        │             │
- │    (Private secure shell)                                         │             │
+ │   │  [Pre-baked NFS]  │        │                   │    │                    │  │
+ │   └───────────────────┘        └───────────────────┘    └─────────┬──────────┘  │
+ │                                                                   │             │
  └───────────────────────────────────────────────────────────────────┼─────────────┘
                                                                      │
                                                       S3 Gateway VPC Endpoint
@@ -157,8 +154,9 @@ Amazon S3 Console showing the destination bucket `destination-bucket-e07653c2` c
 
 ## Features
 
-- ✅ **100% Private Architecture**: All compute, storage, and transfer ENIs reside in private subnets.
-- ✅ **Automatic EFS Mount & Data Seeding**: EC2 user data installs NFS utilities, mounts via direct Mount Target IP, and generates test files.
+- ✅ **100% Private Architecture (No NAT Gateway)**: All compute, storage, and transfer ENIs reside in private subnets with zero NAT Gateway egress costs.
+- ✅ **Custom AMI with Pre-baked NFS**: EC2 uses `datasync-ami` containing pre-installed NFS client tools, enabling instant offline boot with zero internet dependencies.
+- ✅ **Automatic EFS Mount & Data Seeding**: EC2 user data mounts EFS via direct Mount Target IP and generates test files without external package downloads.
 - ✅ **S3 Gateway Endpoint**: Traffic between DataSync and S3 stays on the AWS private network backbone, bypassing NAT gateways and saving transfer costs.
 - ✅ **AWS SSM Integration**: Instant shell access via Session Manager without SSH keys or open inbound ports.
 - ✅ **In-Transit Encryption**: TLS 1.2 encryption for EFS mount and DataSync transfer.
@@ -244,6 +242,7 @@ terraform apply -auto-approve
 | `azs` | List of Availability Zones | `list(string)` | `["ap-south-1a", "ap-south-1b", "ap-south-1c"]` |
 | `public_subnets` | Public subnet CIDRs (for NAT Gateway) | `list(string)` | `["10.0.1.0/24", ...]` |
 | `private_subnets` | Private subnet CIDRs (EC2, EFS, DataSync) | `list(string)` | `["10.0.4.0/24", ...]` |
+| `ami_name` | Name or wildcard of custom AMI for EC2 mount instance | `string` | `"datasync-ami*"` |
 | `datasync_auto_start` | Automatically trigger task execution on apply | `bool` | `true` |
 | `datasync_wait_seconds` | Wait time for EC2 user_data before DataSync start | `number` | `180` |
 
