@@ -156,52 +156,36 @@ data "aws_ami" "datasync" {
 module "instance_profile_role" {
   source             = "./modules/iam"
   role_name          = "instance-profile-role"
-  role_description   = "Instance Profile IAM Role"
+  role_description   = "Least-privilege IAM role for EFS mount EC2 instance"
   policy_name        = "instance-profile-role-policy"
-  policy_description = "Instance Profile IAM Role Policy"
-  assume_role_policy = <<EOF
-    {
-        "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Action": "sts:AssumeRole",
-                "Principal": {
-                  "Service": "ec2.amazonaws.com"
-                },
-                "Effect": "Allow",
-                "Sid": ""
-            }
+  policy_description = "Least-privilege EFS client access policy for mount instance"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "AllowEC2AssumeRole"
+        Action    = "sts:AssumeRole"
+        Effect    = "Allow"
+        Principal = { Service = "ec2.amazonaws.com" }
+      }
+    ]
+  })
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowEFSMountAndWrite"
+        Effect = "Allow"
+        Action = [
+          "elasticfilesystem:ClientMount",
+          "elasticfilesystem:ClientWrite",
+          "elasticfilesystem:DescribeFileSystems",
+          "elasticfilesystem:DescribeMountTargets"
         ]
-    }
-    EOF
-  policy             = <<EOF
-    {
-        "Version": "2012-10-17",
-        "Statement": [            
-            {
-              "Action" : [
-                "s3:*"              
-              ],
-              "Effect"   : "Allow",
-              "Resource" : "*"
-            },
-            {
-              "Action" : [
-                "cloudwatch:*"                
-              ],
-              "Effect"   : "Allow",
-              "Resource" : "*"
-            },
-            {
-              "Action" : [
-                "datasync:*"
-              ],
-              "Effect"   : "Allow",
-              "Resource" : "*"
-            }
-        ]
-    }
-    EOF
+        Resource = module.efs.arn
+      }
+    ]
+  })
 }
 
 resource "aws_iam_role_policy_attachment" "ssm_core" {
